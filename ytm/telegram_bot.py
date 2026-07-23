@@ -23,7 +23,7 @@ import time
 
 import requests
 
-from .config import POOL_FILE, BOT_CONFIG_FILE
+from .config import POOL_FILE, BOT_CONFIG_FILE, BOT_STATE
 from .blocklist import load_blocked_ids
 from . import agent_select, dataapi
 
@@ -38,6 +38,17 @@ def _cfg() -> dict:
 
 def _pool() -> list[dict]:
     return json.load(open(POOL_FILE)).get("songs", [])
+
+
+def _bot_state() -> dict:
+    if os.path.exists(BOT_STATE):
+        return json.load(open(BOT_STATE))
+    return {}
+
+
+def _save_bot_state(state: dict):
+    with open(BOT_STATE, "w") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
 
 
 def _send(token: str, chat_id: int, text: str):
@@ -64,17 +75,19 @@ def handle(cfg: dict, chat_id: int, text: str):
     if not picks:
         _send(token, chat_id, "找不到符合的歌，換個說法試試(例如指定年份/OP/歌手/氛圍)。")
         return
-    title = f"🎧 {text[:80]}"
+    title = f"🤖 Agent 歌單 — {text[:70]}"
     try:
-        res = dataapi.build_playlist(title, [s["video_id"] for s in picks],
-                                     description=f"由 Telegram 依「{text}」挑選",
-                                     skip=load_blocked_ids())
+        pid = _bot_state().get("playlist_id")
+        res = dataapi.upsert_playlist(pid, title, [s["video_id"] for s in picks],
+                                      description=f"由 Telegram 依「{text}」挑選(每次覆蓋)",
+                                      skip=load_blocked_ids())
+        _save_bot_state({"playlist_id": res["playlist_id"]})
     except Exception as e:
         _send(token, chat_id, f"⚠️ 建歌單失敗：{e}")
         return
     lines = "\n".join(f"{i}. {s.get('title','?')} — {s.get('artist','') or '?'}"
                       for i, s in enumerate(picks, 1))
-    _send(token, chat_id, f"✅ 已建 {res['added']} 首\n{res['url']}\n\n{lines}")
+    _send(token, chat_id, f"✅ 已更新歌單({res['added']} 首)\n{res['url']}\n\n{lines}")
 
 
 def main():
