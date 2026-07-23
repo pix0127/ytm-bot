@@ -1,0 +1,6 @@
+# 執行時資料與機密全在 data/（browser.json = 半個 Google 帳號、勿進版控）
+# config.py 會自動建 data/ 及子目錄，故不需 .gitkeep
+data/
+
+__pycache__/
+*.pyc
