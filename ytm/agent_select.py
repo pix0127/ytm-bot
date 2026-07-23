@@ -6,12 +6,13 @@
 """
 import json
 import re
+import time
 
 import requests
 
 from .config import AUTH_FILE
 
-MAX_STEPS = 8
+MAX_STEPS = 6
 OBS_LIMIT = 20        # 每次工具回傳給 LLM 的最多筆數
 CATALOG_CAP = 400     # 整場 catalog 上限
 
@@ -92,27 +93,38 @@ def select(message: str, pool: list[dict], count: int, cfg: dict) -> list[dict]:
                 {"role": "user", "content": f"使用者要求:「{message}」。請挑 {count} 首。"}]
     url, key, model = cfg["llm_url"], cfg["llm_api_key"], cfg.get("model", "deepseek-v4-flash")
 
-    for _ in range(MAX_STEPS):
+    t_start = time.time()
+    print(f"[agent] 開始:「{message}」(挑 {count})", flush=True)
+    for step in range(1, MAX_STEPS + 1):
+        t0 = time.time()
         text = _chat(messages, url, key, model)
+        llm_dt = time.time() - t0
         m = re.search(r"\{.*\}", text, re.S)
         if not m:
+            print(f"[agent] step{step}: LLM {llm_dt:.1f}s → 無 JSON,重試", flush=True)
             messages.append({"role": "user", "content": "請只回一個合法 JSON 動作。"})
             continue
         try:
             act = json.loads(m.group(0))
         except Exception:
+            print(f"[agent] step{step}: LLM {llm_dt:.1f}s → JSON 壞,重試", flush=True)
             messages.append({"role": "user", "content": "JSON 解析失敗,請只回一個合法 JSON 動作。"})
             continue
         action, args = act.get("action"), act.get("args", {})
         if action == "final":
+            print(f"[agent] step{step}: LLM {llm_dt:.1f}s → final | 總計 {time.time()-t_start:.1f}s", flush=True)
             ids = args.get("ids", [])
             return [catalog[i] for i in ids if isinstance(i, int) and 0 <= i < len(catalog)]
+        t1 = time.time()
         try:
             observation = do(action, args)
         except Exception as e:
             observation = f"工具執行錯誤:{e}"
+        tool_dt = time.time() - t1
+        print(f"[agent] step{step}: LLM {llm_dt:.1f}s → {action} | 工具 {tool_dt:.1f}s (catalog={len(catalog)})", flush=True)
         messages.append({"role": "assistant", "content": m.group(0)})
         messages.append({"role": "user", "content": observation})
+    print(f"[agent] 用完 {MAX_STEPS} 步未 final | 總計 {time.time()-t_start:.1f}s", flush=True)
 
     # 用完步數還沒 final:回目前 catalog 的前 count 首(至少有東西)
     return catalog[:count]
