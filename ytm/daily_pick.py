@@ -1,36 +1,39 @@
 #!/usr/bin/env python3.12
-"""
-每日隨選歌單 — 從 pool.json 隨機抽選 N 首，建立 YouTube Music 歌單
+"""每日隨選歌單（OAuth / 官方 YouTube Data API v3 版）。
 
-每次執行會刪除舊歌單 → 建立新歌單（不含 --dry-run）
+與 daily_pick 選歌相同，但用官方 API → 免 cookie、OAuth 自動 refresh，適合 NAS 無人值守。
+只用 pool 已解析好的 video_id（免搜尋，配額極省：建歌單 50 + 每首 50 + 刪舊 50）。
+
+需先： python -m ytm.oauth 完成一次授權。
 
 用法:
-  python3 daily_pick.py                 # 預設抽 20 首
-  python3 daily_pick.py --count 30      # 抽 30 首
-  python3 daily_pick.py --dry-run       # 只顯示不寫入
+  python3 -m ytm.daily_pick --count 20
+  python3 -m ytm.daily_pick --dry-run
 """
-
+import argparse
 import json
 import os
 import random
 import sys
-import argparse
 from datetime import datetime
 
-from .blocklist import load_blocked_ids
-from .matcher import resolve_video_id
-from .config import POOL_FILE, AUTH_FILE, DAILY_STATE as STATE_FILE
+import requests
 
-PLAYLIST_DESC = "每日自動從歌曲大池隨機抽選"
+from .config import POOL_FILE, STATE_DIR
+from .blocklist import load_blocked_ids
+from .oauth import get_access_token
+
+V3 = "https://www.googleapis.com/youtube/v3"
+STATE_FILE = os.path.join(STATE_DIR, "daily_pick_state.json")
+PLAYLIST_DESC = "每日自動從歌曲大池隨機抽選（Data API v3）"
 
 
 def load_pool() -> list[dict]:
     if not os.path.exists(POOL_FILE):
-        print("❌ pool.json 不存在，請先執行 collect.py")
+        print("❌ pool.json 不存在，請先執行 collect / resolve_pool")
         sys.exit(1)
     with open(POOL_FILE) as f:
-        data = json.load(f)
-    return data.get("songs", [])
+        return json.load(f).get("songs", [])
 
 
 def load_state() -> dict:
@@ -45,116 +48,69 @@ def save_state(state: dict):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
-def pick_songs(songs: list[dict], count: int) -> list[dict]:
-    return random.sample(songs, min(count, len(songs)))
+def main():
+    parser = argparse.ArgumentParser(description="每日隨選歌單（Data API v3）")
+    parser.add_argument("--count", type=int, default=20)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
 
+    songs = [s for s in load_pool() if s.get("video_id")]  # 只用已解析出 videoId 的
+    if not songs:
+        print("❌ pool 中沒有含 video_id 的歌，請先執行 resolve_pool")
+        sys.exit(1)
+    picked = random.sample(songs, min(args.count, len(songs)))
 
-def print_playlist(picked: list[dict]):
-    anime = [s for s in picked if s.get("source") == "anime"]
-    artist = [s for s in picked if s.get("source") == "artist"]
+    print("\n" + "=" * 40)
     print(f"🎵 共抽 {len(picked)} 首")
-    print(f"   新番: {len(anime)} 首 | 歌手: {len(artist)} 首\n")
-
     for i, s in enumerate(picked, 1):
-        title = s.get("title", "?")
-        artist = s.get("artist", "?") or "?"
-        if s.get("source") == "anime":
-            info = f" [番] {s.get('anime', '?')} ({s.get('type', '')})"
-        else:
-            info = " [歌手]"
-        print(f"  {i:2d}. {title} — {artist}{info}")
+        print(f"  {i:2d}. {s.get('title', '?')} — {s.get('artist', '') or '?'}")
 
-
-def delete_old_playlist(yt, state: dict):
-    """刪除上一次建立的歌單"""
-    old_id = state.get("playlist_id")
-    if not old_id:
+    if args.dry_run:
+        print("\n🔍 乾跑模式，未寫入")
         return
-    try:
-        yt.delete_playlist(old_id)
-        print(f"🗑️  已刪除舊歌單")
-    except Exception as e:
-        print(f"⚠️  無法刪除舊歌單: {e}")
 
+    H = {"Authorization": f"Bearer {get_access_token()}", "Content-Type": "application/json"}
+    state = load_state()
 
-def create_playlist(yt, picked: list[dict]) -> str:
-    """建立新歌單並加歌"""
+    old = state.get("playlist_id")
+    if old:
+        r = requests.delete(f"{V3}/playlists", headers=H, params={"id": old})
+        print("🗑️  已刪除舊歌單" if r.status_code == 204 else f"⚠️  刪舊歌單 HTTP {r.status_code}")
+
     name = f"今日隨選 ({datetime.now().strftime('%m/%d')})"
-    playlist_id = yt.create_playlist(name, PLAYLIST_DESC)
+    r = requests.post(f"{V3}/playlists", headers=H, params={"part": "snippet,status"},
+                      json={"snippet": {"title": name, "description": PLAYLIST_DESC},
+                            "status": {"privacyStatus": "private"}})
+    r.raise_for_status()
+    pid = r.json()["id"]
     print(f"✅ 已建立: {name}")
 
     blocked = load_blocked_ids()
-    added = 0
-    skipped = 0
-    not_found = []
+    added = skipped = failed = 0
     for s in picked:
-        try:
-            vid = resolve_video_id(yt, s)
-            if not vid:
-                not_found.append(f"{s.get('title', '')} {s.get('artist', '')}")
-            elif vid in blocked:
-                skipped += 1
-            else:
-                yt.add_playlist_items(playlist_id, [vid])
-                added += 1
-        except Exception:
-            not_found.append(s.get("title", "?"))
+        vid = s["video_id"]
+        if vid in blocked:
+            skipped += 1
+            continue
+        rr = requests.post(f"{V3}/playlistItems", headers=H, params={"part": "snippet"},
+                           json={"snippet": {"playlistId": pid,
+                                             "resourceId": {"kind": "youtube#video", "videoId": vid}}})
+        if rr.ok:
+            added += 1
+        else:
+            failed += 1
 
     print(f"✅ 已加入 {added}/{len(picked)} 首")
     if skipped:
-        print(f"🚫 跳過 {skipped} 首（在黑名單中）")
-    if not_found:
-        print(f"⚠️  未找到 {len(not_found)} 首")
-        for q in not_found[:5]:
-            print(f"    - {q}")
+        print(f"🚫 跳過 {skipped} 首（黑名單）")
+    if failed:
+        print(f"⚠️  {failed} 首加入失敗（多為 Music-only／已下架，跳過）")
 
-    return playlist_id
-
-
-# ─── Main ─────────────────────────────────────────────────────────
-
-def main():
-    parser = argparse.ArgumentParser(description="每日隨選歌單")
-    parser.add_argument("--count", type=int, default=20, help="抽選數量 (預設 20)")
-    parser.add_argument("--dry-run", action="store_true", help="只顯示不寫入")
-    args = parser.parse_args()
-
-    songs = load_pool()
-    if len(songs) < args.count:
-        print(f"⚠️  池中只有 {len(songs)} 首，少於要求的 {args.count}")
-        args.count = len(songs)
-
-    state = load_state()
-    picked = pick_songs(songs, args.count)
-
-    print("\n" + "=" * 40)
-    print_playlist(picked)
-
-    if args.dry_run:
-        print("\n🔍 乾跑模式，未寫入 YTM")
-        return
-
-    from ytmusicapi import YTMusic
-    yt = YTMusic(AUTH_FILE)
-
-    delete_old_playlist(yt, state)
-    playlist_id = create_playlist(yt, picked)
-
-    # 更新狀態
-    state["playlist_id"] = playlist_id
-    state["last_pick"] = [s.get("title", "") for s in picked]
+    state["playlist_id"] = pid
     save_state(state)
-
-    playlist_url = f"https://music.youtube.com/playlist?list={playlist_id}"
-    print(f"\n🔗 {playlist_url}")
-
-    result = {
-        "url": playlist_url,
-        "count": len(picked),
-        "anime": len([s for s in picked if s.get("source") == "anime"]),
-        "artists": len([s for s in picked if s.get("source") == "artist"]),
-    }
-    print(f"\nJSON:{json.dumps(result, ensure_ascii=False)}")
+    url = f"https://music.youtube.com/playlist?list={pid}"
+    print(f"\n🔗 {url}")
+    print(f"\nJSON:{json.dumps({'url': url, 'count': len(picked), 'added': added}, ensure_ascii=False)}")
 
 
 if __name__ == "__main__":

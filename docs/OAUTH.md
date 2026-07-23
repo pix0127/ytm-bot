@@ -27,6 +27,6 @@ Data API v3 預設配額 **10,000 units/天**，`search.list`=100、`playlistIte
 1. 在 Google Cloud 建「TV and Limited Input devices」型 OAuth client，啟用 YouTube Data API v3。
 2. 憑證放 `data/oauth_client.json`（`{"client_id":..., "client_secret":...}`）或環境變數 `YTM_OAUTH_CLIENT_ID`/`YTM_OAUTH_CLIENT_SECRET`。
 3. `python -m ytm.oauth` 跑一次 device flow（瀏覽器輸入代碼授權）→ token 存 `data/oauth.json`，之後自動 refresh。
-4. 排程用 `deploy/run_daily_oauth.sh`。
+4. 排程用 `deploy/run_daily.sh`。
 
 `data/` 全 gitignored（含 client_secret、token）。若曾外流 client_secret，到 Google Cloud 憑證頁重設後更新 `data/oauth_client.json`。
