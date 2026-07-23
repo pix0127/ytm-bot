@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""在 Windows 上跑：讀 Edge 的 YouTube Music cookie，產生 browser.json。
+"""在 Windows 上跑：讀瀏覽器的 YouTube Music cookie，產生 browser.json。
 
-用法（在你登入了 music.youtube.com 的 Windows 機器上）：
+用法（在你登入了 music.youtube.com 的機器上）：
     pip install browser_cookie3
     python refresh_ytm_cookie.py                # 產生到當前目錄
     python refresh_ytm_cookie.py "Z:\\ytm\\browser.json"   # 直接寫進共享資料夾
 
-不用開 DevTools、不用 Copy as cURL。cookie 失效時重跑這支即可。
+⚠️ Chrome/Edge 127+（2024/7 起）用 App-Bound Encryption，browser_cookie3 解不開 →
+   請改用 **Firefox**：在 Firefox 登入 music.youtube.com 後再跑這支（本程式會優先讀 Firefox）。
+   若堅持用 Chrome/Edge 且讀不到，只能退回 DevTools「Copy as cURL」手動貼。
+
+cookie 失效時重跑這支即可。
 """
 import json
 import sys
@@ -15,17 +19,27 @@ import browser_cookie3
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "browser.json"
 
-# Edge 讀不到就 fallback 到 Chrome
-for loader in (browser_cookie3.edge, browser_cookie3.chrome):
+# Firefox 沒有 App-Bound Encryption，最可靠 → 優先；Chrome/Edge 在 127+ 可能解不開
+cookies = []
+for name, loader in (("firefox", browser_cookie3.firefox),
+                     ("edge", browser_cookie3.edge),
+                     ("chrome", browser_cookie3.chrome)):
     try:
         cj = loader(domain_name="youtube.com")
-        cookies = list(cj)
-        if any(c.name == "SAPISID" for c in cookies):
+        got = list(cj)
+        if any(c.name == "SAPISID" for c in got):
+            cookies = got
+            print(f"✅ 從 {name} 讀到 cookie")
             break
-    except Exception:
-        cookies = []
-else:
-    sys.exit("讀不到含 SAPISID 的 YouTube cookie；請確認已在 Edge/Chrome 登入 music.youtube.com")
+    except Exception as e:
+        print(f"   {name}: 讀取失敗（{type(e).__name__}）")
+if not cookies:
+    sys.exit(
+        "讀不到含 SAPISID 的 YouTube cookie。\n"
+        "多半是 Chrome/Edge 127+ 的 App-Bound Encryption 擋住了 →\n"
+        "  1) 改用 Firefox 登入 music.youtube.com 後重跑本程式（最省事）；或\n"
+        "  2) 用 DevTools 對 /youtubei/ 請求 Copy as cURL，手動貼 Cookie。"
+    )
 
 cookie_str = "; ".join(f"{c.name}={c.value}" for c in cookies)
 
