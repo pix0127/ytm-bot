@@ -36,11 +36,16 @@ def build_playlist(title: str, video_ids: list[str], description: str = "",
     """建歌單並加入 video_ids（skip 內的跳過）。回 {playlist_id, url, added, failed, skipped}."""
     skip = skip or set()
     pid = create_playlist(title, description)
-    added = failed = skipped = 0
+    added = failed = skipped = dups = 0
+    seen = set()
     for vid in video_ids:
         if vid in skip:
             skipped += 1
             continue
+        if vid in seen:      # 去重:同一 videoId 不重複加入
+            dups += 1
+            continue
+        seen.add(vid)
         if add_video(pid, vid):
             added += 1
         else:
@@ -48,5 +53,5 @@ def build_playlist(title: str, video_ids: list[str], description: str = "",
     return {
         "playlist_id": pid,
         "url": f"https://music.youtube.com/playlist?list={pid}",
-        "added": added, "failed": failed, "skipped": skipped,
+        "added": added, "failed": failed, "skipped": skipped, "dups": dups,
     }

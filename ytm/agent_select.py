@@ -30,6 +30,17 @@ SYSTEM = """你是動畫音樂選曲 agent。目標:依使用者要求,用工具
 - 盡量在 3~6 步內完成。final 的 ids 數量 = 使用者要求的數量。"""
 
 
+def _dedupe(songs: list[dict]) -> list[dict]:
+    """依 video_id 去重,保留順序。"""
+    seen, out = set(), []
+    for s in songs:
+        v = s.get("video_id")
+        if v and v not in seen:
+            seen.add(v)
+            out.append(s)
+    return out
+
+
 def _chat(messages: list, url: str, key: str, model: str) -> str:
     r = requests.post(url, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                       json={"model": model, "messages": messages, "max_tokens": 4000, "temperature": 0.5},
@@ -114,7 +125,7 @@ def select(message: str, pool: list[dict], count: int, cfg: dict) -> list[dict]:
         if action == "final":
             print(f"[agent] step{step}: LLM {llm_dt:.1f}s → final | 總計 {time.time()-t_start:.1f}s", flush=True)
             ids = args.get("ids", [])
-            return [catalog[i] for i in ids if isinstance(i, int) and 0 <= i < len(catalog)]
+            return _dedupe([catalog[i] for i in ids if isinstance(i, int) and 0 <= i < len(catalog)])
         t1 = time.time()
         try:
             observation = do(action, args)
@@ -127,4 +138,4 @@ def select(message: str, pool: list[dict], count: int, cfg: dict) -> list[dict]:
     print(f"[agent] 用完 {MAX_STEPS} 步未 final | 總計 {time.time()-t_start:.1f}s", flush=True)
 
     # 用完步數還沒 final:回目前 catalog 的前 count 首(至少有東西)
-    return catalog[:count]
+    return _dedupe(catalog)[:count]
