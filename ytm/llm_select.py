@@ -68,7 +68,7 @@ def select(message: str, pool: list[dict], count: int,
             {"role": "system", "content": "你是動畫音樂選曲助手,依使用者的語意/氛圍/條件從候選清單挑歌。只回 JSON。"},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 1024,
+        "max_tokens": 4000,  # DeepSeek V4 等推理模型會先用掉一段 reasoning_content，需留足空間否則 content 空白
         "temperature": 0.7,
     }
     r = requests.post(llm_url, headers={"Authorization": f"Bearer {api_key}",
