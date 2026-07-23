@@ -33,6 +33,20 @@ python -m ytm.prune_disliked          # 把按爛(DISLIKE)的歌從歌單 + pool
 
 資料目錄可用環境變數 `YTM_DATA_DIR` 覆蓋（Docker / NAS 共享資料夾用）。
 
+### OAuth 版 daily_pick（免 cookie，適合 NAS 無人值守）
+
+`daily_pick` 另有走**官方 YouTube Data API v3 + OAuth** 的版本，優點是自動 refresh、不必維護 cookie；
+只用 pool 已解析好的 video_id（免搜尋），每日配額約 1,100 units（遠低於 10,000/天）。
+
+```bash
+# client 憑證放 data/oauth_client.json（或環境變數 YTM_OAUTH_CLIENT_ID/SECRET）
+python -m ytm.oauth                    # 一次性 device-flow 授權 → data/oauth.json
+python -m ytm.daily_pick_oauth --count 20
+```
+
+僅 daily_pick 適用此路（每日小量）；collect / resolve_pool / yearly_playlists 因配額或需 YT Music
+歌曲目錄，仍走 browser auth。詳見 [docs/OAUTH.md](docs/OAUTH.md)（兩個 API 的差異與配額）。
+
 ## 認證更新
 
 cookie 幾個月失效一次。在**登入了 music.youtube.com 的 Windows 機器**上：
