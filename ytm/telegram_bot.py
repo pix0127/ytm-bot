@@ -25,7 +25,7 @@ import requests
 
 from .config import POOL_FILE, BOT_CONFIG_FILE
 from .blocklist import load_blocked_ids
-from . import llm_select, dataapi
+from . import agent_select, dataapi
 
 API = "https://api.telegram.org/bot{token}/{method}"
 
@@ -55,10 +55,9 @@ def _wanted_count(msg: str, default: int) -> int:
 def handle(cfg: dict, chat_id: int, text: str):
     token = cfg["telegram_token"]
     count = _wanted_count(text, cfg.get("count_default", 20))
-    _send(token, chat_id, f"🔎 依「{text}」挑 {count} 首中…")
+    _send(token, chat_id, f"🤖 agent 依「{text}」查 YTM 電台/搜尋選 {count} 首中…(約 1–3 分鐘)")
     try:
-        picks = llm_select.select(text, _pool(), count,
-                                  cfg["llm_url"], cfg["llm_api_key"], cfg.get("model", "deepseek-v4-flash"))
+        picks = agent_select.select(text, _pool(), count, cfg)
     except Exception as e:
         _send(token, chat_id, f"⚠️ 選曲失敗：{e}")
         return
