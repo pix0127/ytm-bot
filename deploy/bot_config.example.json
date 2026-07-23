@@ -1,7 +1,8 @@
 {
   "telegram_token": "123456:ABC-從-BotFather-取得",
   "allowed_chat_id": null,
-  "anthropic_api_key": "sk-ant-...",
-  "model": "claude-sonnet-5",
+  "llm_url": "https://opencode.ai/zen/go/v1/chat/completions",
+  "llm_api_key": "你的-opencode-zen-key",
+  "model": "deepseek-v4-flash",
   "count_default": 20
 }

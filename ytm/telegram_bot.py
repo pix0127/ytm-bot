@@ -8,8 +8,9 @@ long-poll（不需對外開埠），只回應設定的 chat_id。挑歌用 LLM�
   {
     "telegram_token": "...",           # @BotFather 給的
     "allowed_chat_id": 12345678,       # 只有這個 chat 能下指令；先設 null，對 bot 說話它會回你的 id
-    "anthropic_api_key": "sk-ant-...",
-    "model": "claude-sonnet-5",        # 可換
+    "llm_url": "https://opencode.ai/zen/go/v1/chat/completions",  # OpenAI 相容端點
+    "llm_api_key": "...",
+    "model": "deepseek-v4-flash",
     "count_default": 20
   }
 
@@ -57,7 +58,7 @@ def handle(cfg: dict, chat_id: int, text: str):
     _send(token, chat_id, f"🔎 依「{text}」挑 {count} 首中…")
     try:
         picks = llm_select.select(text, _pool(), count,
-                                  cfg["anthropic_api_key"], cfg.get("model", "claude-sonnet-5"))
+                                  cfg["llm_url"], cfg["llm_api_key"], cfg.get("model", "deepseek-v4-flash"))
     except Exception as e:
         _send(token, chat_id, f"⚠️ 選曲失敗：{e}")
         return
