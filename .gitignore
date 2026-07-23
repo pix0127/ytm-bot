@@ -4,3 +4,6 @@ data/
 
 __pycache__/
 *.pyc
+
+# NAS Firefox 容器的 profile（含 Google session，勿進版控）
+deploy/nas-firefox/ff-profile/
