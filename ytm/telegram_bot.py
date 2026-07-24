@@ -18,6 +18,8 @@ long-poll（不需對外開埠），只回應設定的 chat_id。挑歌用 LLM�
 """
 import json
 import os
+import random
+import re
 import sys
 import time
 
@@ -25,7 +27,7 @@ import requests
 
 from .config import POOL_FILE, BOT_CONFIG_FILE, BOT_STATE
 from .blocklist import load_blocked_ids
-from . import agent_select, dataapi
+from . import agent_select, dataapi, llm_select
 
 API = "https://api.telegram.org/bot{token}/{method}"
 
@@ -57,37 +59,72 @@ def _send(token: str, chat_id: int, text: str):
 
 
 def _wanted_count(msg: str, default: int) -> int:
-    import re
-    m = re.search(r"(\d{1,2})\s*(首|songs?|首歌)?", msg)
+    # 只取「前後都不是數字」的 1~2 位數,避免咬到年份(如 2024 的 20)
+    m = re.search(r"(?<!\d)(\d{1,2})(?!\d)", msg)
     n = int(m.group(1)) if m else default
     return max(1, min(n, 50))
+
+
+HELP = (
+    "指令:\n"
+    "/rand [數量] — 從曲庫純隨機(最快)\n"
+    "/pool <條件> [數量] — 按 年份/OP/ED/歌手/作品 篩選(快,不用 AI)\n"
+    "  例:/pool 2024 OP 15\n"
+    "/agent <描述> — AI agent 依氛圍/相似找歌(會查 YTM 電台,約 1–3 分鐘)\n"
+    "  例:/agent 適合讀書的\n"
+    "直接打字(不帶指令) = /agent。數量可寫在句中,如「…15首」。"
+)
+
+
+def _publish(token: int, chat_id: int, title: str, picks: list, note: str):
+    if not picks:
+        _send(token, chat_id, "找不到符合的歌,換個說法或條件試試。")
+        return
+    try:
+        pid = _bot_state().get("playlist_id")
+        res = dataapi.upsert_playlist(pid, title, [s["video_id"] for s in picks],
+                                      description=note, skip=load_blocked_ids())
+        _save_bot_state({"playlist_id": res["playlist_id"]})
+    except Exception as e:
+        _send(token, chat_id, f"⚠️ 建歌單失敗:{e}")
+        return
+    lines = "\n".join(f"{i}. {s.get('title','?')} — {s.get('artist','') or '?'}"
+                      for i, s in enumerate(picks, 1))
+    _send(token, chat_id, f"✅ 已更新歌單({res['added']} 首)\n{res['url']}\n\n{lines}")
 
 
 def handle(cfg: dict, chat_id: int, text: str):
     token = cfg["telegram_token"]
     count = _wanted_count(text, cfg.get("count_default", 20))
-    _send(token, chat_id, f"🤖 agent 依「{text}」查 YTM 電台/搜尋選 {count} 首中…(約 1–3 分鐘)")
+    low = text.lower().strip()
+    rest = text.split(None, 1)[1] if len(text.split(None, 1)) > 1 else ""
+    pool = _pool()
+
+    if low.startswith("/help") or low in ("/start", "help"):
+        _send(token, chat_id, HELP)
+        return
+
+    if low.startswith("/rand"):
+        cand = [s for s in pool if s.get("video_id")]
+        picks = random.sample(cand, min(count, len(cand))) if cand else []
+        _publish(token, chat_id, f"🎲 隨機 {len(picks)} 首", picks, "Telegram /rand 隨機")
+        return
+
+    if low.startswith("/pool"):
+        cand = llm_select._prefilter(rest or text, pool)
+        picks = random.sample(cand, min(count, len(cand))) if cand else []
+        _publish(token, chat_id, f"🎯 {(rest or text)[:60]}", picks, f"Telegram /pool 篩選:{rest}")
+        return
+
+    # /agent、/vibe 或純文字 → 走 agent
+    query = rest if low.startswith(("/agent", "/vibe")) else text
+    _send(token, chat_id, f"🤖 agent 依「{query}」查 YTM 電台/搜尋選 {count} 首中…(約 1–3 分鐘)")
     try:
-        picks = agent_select.select(text, _pool(), count, cfg)
+        picks = agent_select.select(query, pool, count, cfg)
     except Exception as e:
-        _send(token, chat_id, f"⚠️ 選曲失敗：{e}")
+        _send(token, chat_id, f"⚠️ 選曲失敗:{e}")
         return
-    if not picks:
-        _send(token, chat_id, "找不到符合的歌，換個說法試試(例如指定年份/OP/歌手/氛圍)。")
-        return
-    title = f"🤖 Agent 歌單 — {text[:70]}"
-    try:
-        pid = _bot_state().get("playlist_id")
-        res = dataapi.upsert_playlist(pid, title, [s["video_id"] for s in picks],
-                                      description=f"由 Telegram 依「{text}」挑選(每次覆蓋)",
-                                      skip=load_blocked_ids())
-        _save_bot_state({"playlist_id": res["playlist_id"]})
-    except Exception as e:
-        _send(token, chat_id, f"⚠️ 建歌單失敗：{e}")
-        return
-    lines = "\n".join(f"{i}. {s.get('title','?')} — {s.get('artist','') or '?'}"
-                      for i, s in enumerate(picks, 1))
-    _send(token, chat_id, f"✅ 已更新歌單({res['added']} 首)\n{res['url']}\n\n{lines}")
+    _publish(token, chat_id, f"🤖 {query[:64]}", picks, f"Telegram agent:{query}")
 
 
 def main():
