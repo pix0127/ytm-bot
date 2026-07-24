@@ -127,10 +127,25 @@ def handle(cfg: dict, chat_id: int, text: str):
     _publish(token, chat_id, f"🤖 {query[:64]}", picks, f"Telegram agent:{query}")
 
 
+def _set_commands(token: str):
+    """向 Telegram 註冊指令清單 → 聊天室按 / 會跳出提示選單。"""
+    cmds = [
+        {"command": "rand", "description": "隨機 N 首(最快)"},
+        {"command": "pool", "description": "按 年份/OP-ED/歌手/作品 篩選"},
+        {"command": "agent", "description": "AI 依氛圍/相似找歌(較慢)"},
+        {"command": "help", "description": "顯示說明"},
+    ]
+    try:
+        requests.post(API.format(token=token, method="setMyCommands"), json={"commands": cmds}, timeout=15)
+    except Exception as e:
+        print("setMyCommands 失敗:", e)
+
+
 def main():
     cfg = _cfg()
     token = cfg["telegram_token"]
     allowed = cfg.get("allowed_chat_id")
+    _set_commands(token)
     offset = None
     print("bot 啟動，long-poll 中… (Ctrl-C 停止)")
     while True:
