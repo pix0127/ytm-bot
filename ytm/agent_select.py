@@ -27,7 +27,9 @@ SYSTEM = """你是動畫音樂選曲 agent。目標:依使用者要求,用工具
 規則:
 - 工具回傳的每首歌都有 catalog 編號;radio 與 final 只能用**已出現過的**編號。
 - 由你自己決定用哪些工具:若使用者給的是**明確 metadata**(年份/OP-ED/指定歌手或作品),直接 filter_pool 選完就 final,**不必開電台**(較快);只有**氛圍/相似/發現類**需求(如「放鬆的」「像X那種」「推薦新歌」)才用 radio 從對味種子擴展出真實相似曲,不要空想。
-- 盡量在 3~6 步內完成。final 的 ids 數量 = 使用者要求的數量。"""
+- **候選收集到目標數的約 2 倍就要 final,不要一直 radio/search**。盡量 3~5 步內 final。
+- final 前確認每首都**符合原始需求的語言/主題**(例如要日本歌手就別放中文/其他語言的歌),離題的不要選。
+- final 的 ids 數量 = 使用者要求的數量。"""
 
 
 def _dedupe(songs: list[dict]) -> list[dict]:
@@ -135,7 +137,18 @@ def select(message: str, pool: list[dict], count: int, cfg: dict) -> list[dict]:
         print(f"[agent] step{step}: LLM {llm_dt:.1f}s → {action} | 工具 {tool_dt:.1f}s (catalog={len(catalog)})", flush=True)
         messages.append({"role": "assistant", "content": m.group(0)})
         messages.append({"role": "user", "content": observation})
-    print(f"[agent] 用完 {MAX_STEPS} 步未 final | 總計 {time.time()-t_start:.1f}s", flush=True)
-
-    # 用完步數還沒 final:回目前 catalog 的前 count 首(至少有東西)
-    return _dedupe(catalog)[:count]
+    # 步數用盡:強制 LLM 從已收集候選中做最終挑選(排除離題),而非直接倒出原始 catalog
+    messages.append({"role": "user", "content":
+        f"步數用盡,現在**必須**輸出 final:從先前工具回傳過的候選編號中,挑 {count} 首最符合"
+        f"「{message}」的,**排除語言/主題不符或離題的**。只回 JSON {{\"ids\":[...]}}。"})
+    picks = []
+    try:
+        text = _chat(messages, url, key, model)
+        m = re.search(r"\{.*\}", text, re.S)
+        if m:
+            ids = json.loads(m.group(0)).get("ids", [])
+            picks = [catalog[i] for i in ids if isinstance(i, int) and 0 <= i < len(catalog)]
+    except Exception:
+        pass
+    print(f"[agent] 強制 final:{len(picks)} 首 | 總計 {time.time()-t_start:.1f}s", flush=True)
+    return _dedupe(picks) if picks else _dedupe(catalog)[:count]
