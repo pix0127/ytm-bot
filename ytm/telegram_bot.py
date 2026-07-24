@@ -33,12 +33,12 @@ API = "https://api.telegram.org/bot{token}/{method}"
 COUNTS = [10, 20, 30, 50]
 AGENT_PROMPT = "🎧 想要什麼樣的歌單?請「回覆」這則訊息描述(例:放鬆的、像 YOASOBI、適合讀書)"
 HELP = (
-    "指令(按 / 或選單,選了會跳按鈕追問):\n"
-    "/rand — 純隨機(最快)\n"
-    "/pool — 按 年份→OP/ED→數量 篩選\n"
-    "/agent — AI 依氛圍/相似找歌(較慢,1–3 分)\n"
-    "/help — 說明\n\n"
-    "也可直接帶參數:/rand 30、/pool 2024 OP 15、/agent 放鬆的"
+    "🎵 用這些指令(按 / 或選單,選了會跳按鈕):\n"
+    "/rand — 隨機來一批(最快)\n"
+    "/pool — 挑指定年份、片頭(OP)或片尾(ED)的歌\n"
+    "/agent — 用 AI 依心情/風格找歌(較慢,約 1–3 分)\n"
+    "/help — 這個說明\n\n"
+    "老手也可直接打:/rand 30、/pool 2024 OP 15、/agent 放鬆的"
 )
 
 
@@ -179,8 +179,8 @@ def handle_message(cfg, chat_id, text, msg):
         else:     # 互動:先選年份
             ys = _pool_years(pool)[:8]
             rows = [[(y, f"p:y:{y}") for y in ys[i:i + 4]] for i in range(0, len(ys), 4)]
-            rows.append([("全部年份", "p:y:all")])
-            _send(token, chat_id, "🎯 選年份:", _kb(rows))
+            rows.append([("不限年份", "p:y:all")])
+            _send(token, chat_id, "🎯 要哪一年的動畫歌?", _kb(rows))
         return
 
     if low.startswith(("/agent", "/vibe")):
@@ -203,13 +203,14 @@ def handle_callback(cfg, chat_id, msg_id, data, cb_id):
     if p[0] == "r":                                   # r:N → 隨機
         _edit(token, chat_id, msg_id, f"🎲 隨機 {p[1]} 首,建立中…")
         _do_rand(token, chat_id, pool, int(p[1]))
-    elif p[0] == "p" and p[1] == "y":                 # p:y:<Y> → 選類型
+    elif p[0] == "p" and p[1] == "y":                 # p:y:<Y> → 選片頭/片尾
         y = p[2]
-        _edit(token, chat_id, msg_id, f"年份 {'全部' if y == 'all' else y} → 選類型:",
-              _kb([[("OP", f"p:t:{y}:OP"), ("ED", f"p:t:{y}:ED"), ("全部", f"p:t:{y}:all")]]))
+        _edit(token, chat_id, msg_id, f"{'不限年份' if y == 'all' else y + ' 年'} → 要片頭還是片尾?",
+              _kb([[("片頭 OP", f"p:t:{y}:OP"), ("片尾 ED", f"p:t:{y}:ED"), ("都要", f"p:t:{y}:all")]]))
     elif p[0] == "p" and p[1] == "t":                 # p:t:<Y>:<T> → 選數量
         y, t = p[2], p[3]
-        _edit(token, chat_id, msg_id, f"{'全年' if y == 'all' else y}/{t} → 幾首:",
+        tname = {"OP": "片頭", "ED": "片尾", "all": "片頭+片尾"}.get(t, t)
+        _edit(token, chat_id, msg_id, f"{'不限年份' if y == 'all' else y + ' 年'}・{tname} → 要幾首?",
               _kb([[(str(n), f"p:n:{y}:{t}:{n}") for n in COUNTS]]))
     elif p[0] == "p" and p[1] == "n":                 # p:n:<Y>:<T>:<N> → 建立
         y, t, n = p[2], p[3], int(p[4])
@@ -219,10 +220,10 @@ def handle_callback(cfg, chat_id, msg_id, data, cb_id):
 
 def _set_commands(token):
     cmds = [
-        {"command": "rand", "description": "隨機 N 首(最快)"},
-        {"command": "pool", "description": "按 年份/OP-ED/數量 篩選"},
-        {"command": "agent", "description": "AI 依氛圍/相似找歌(較慢)"},
-        {"command": "help", "description": "顯示說明"},
+        {"command": "rand", "description": "隨機來一批(最快)"},
+        {"command": "pool", "description": "挑年份・片頭(OP)/片尾(ED)"},
+        {"command": "agent", "description": "用 AI 依心情/風格找歌(較慢)"},
+        {"command": "help", "description": "使用說明"},
     ]
     try:
         requests.post(API.format(token=token, method="setMyCommands"), json={"commands": cmds}, timeout=15)
