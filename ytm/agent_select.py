@@ -44,14 +44,17 @@ def _dedupe(songs: list[dict]) -> list[dict]:
 
 
 def _chat(messages: list, url: str, key: str, model: str) -> str:
+    # thinking 關掉:選曲/挑動作沒有推理步驟可走,reasoning 只是空轉(實測 10s → 1.7s),
+    # 且 reasoning 會把 max_tokens 吃光導致 content 回空字串。關掉後 800 tokens 綽綽有餘。
     r = requests.post(url, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                      json={"model": model, "messages": messages, "max_tokens": 4000, "temperature": 0.5},
+                      json={"model": model, "messages": messages, "max_tokens": 800, "temperature": 0.5,
+                            "thinking": {"type": "disabled"}},
                       timeout=120)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"] or ""
 
 
-def select(message: str, pool: list[dict], count: int, cfg: dict) -> list[dict]:
+def select(message: str, pool: list[dict], count: int, cfg: dict, on_step=None) -> list[dict]:
     from ytmusicapi import YTMusic
     yt = YTMusic(AUTH_FILE)
     pool = [s for s in pool if s.get("video_id")]
@@ -135,6 +138,8 @@ def select(message: str, pool: list[dict], count: int, cfg: dict) -> list[dict]:
             observation = f"工具執行錯誤:{e}"
         tool_dt = time.time() - t1
         print(f"[agent] step{step}: LLM {llm_dt:.1f}s → {action} | 工具 {tool_dt:.1f}s (catalog={len(catalog)})", flush=True)
+        if on_step:
+            on_step(step, action, len(catalog))
         messages.append({"role": "assistant", "content": m.group(0)})
         messages.append({"role": "user", "content": observation})
     # 步數用盡:強制 LLM 從已收集候選中做最終挑選(排除離題),而非直接倒出原始 catalog

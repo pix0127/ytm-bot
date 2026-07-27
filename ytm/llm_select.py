@@ -68,8 +68,11 @@ def select(message: str, pool: list[dict], count: int,
             {"role": "system", "content": "你是動畫音樂選曲助手,依使用者的語意/氛圍/條件從候選清單挑歌。只回 JSON。"},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 4000,  # DeepSeek V4 等推理模型會先用掉一段 reasoning_content，需留足空間否則 content 空白
+        "max_tokens": 800,
         "temperature": 0.7,
+        # 關掉 thinking:挑歌沒有推理步驟可走,reasoning 只是空轉(實測 27s → 2s),
+        # 且候選一多時 reasoning 會吃光 max_tokens 讓 content 回空字串(選曲整個失敗)。
+        "thinking": {"type": "disabled"},
     }
     r = requests.post(llm_url, headers={"Authorization": f"Bearer {api_key}",
                                         "Content-Type": "application/json"},

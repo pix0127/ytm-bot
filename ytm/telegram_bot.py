@@ -21,7 +21,9 @@ import json
 import os
 import random
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
@@ -48,8 +50,17 @@ def _cfg() -> dict:
     return json.load(open(BOT_CONFIG_FILE))
 
 
+_prep_pool = ThreadPoolExecutor(2)
+_pool_cache: tuple[float, list[dict]] | None = None
+
+
 def _pool() -> list[dict]:
-    return json.load(open(POOL_FILE)).get("songs", [])
+    """pool.json 840KB / 3600 首,每則訊息重 parse 太浪費;依 mtime 快取。"""
+    global _pool_cache
+    mt = os.path.getmtime(POOL_FILE)
+    if _pool_cache is None or _pool_cache[0] != mt:
+        _pool_cache = (mt, json.load(open(POOL_FILE)).get("songs", []))
+    return _pool_cache[1]
 
 
 def _bot_state() -> dict:
@@ -67,7 +78,11 @@ def _send(token, chat_id, text, markup=None):
     p = {"chat_id": chat_id, "text": text, "disable_web_page_preview": False}
     if markup:
         p["reply_markup"] = markup
-    requests.post(API.format(token=token, method="sendMessage"), json=p, timeout=20)
+    r = requests.post(API.format(token=token, method="sendMessage"), json=p, timeout=20)
+    try:
+        return r.json()["result"]["message_id"]
+    except Exception:
+        return None
 
 
 def _edit(token, chat_id, msg_id, text, markup=None):
@@ -101,15 +116,19 @@ def _pool_years(pool):
 
 # ─── 選曲 + 發佈 ──────────────────────────────────────────────────
 
-def _publish(token, chat_id, title, picks, note):
+def _prepare_playlist(title, note):
+    """先把新歌單開好(刪舊+開新,約 2s)。不需要 picks,所以能跟選曲並行。"""
+    return _prep_pool.submit(dataapi.new_playlist, _bot_state().get("playlist_id"), title, note)
+
+
+def _publish(token, chat_id, title, picks, note, prep=None):
     if not picks:
         _send(token, chat_id, "找不到符合的歌,換個條件試試。")
         return
     try:
-        pid = _bot_state().get("playlist_id")
-        res = dataapi.upsert_playlist(pid, title, [s["video_id"] for s in picks],
-                                      description=note, skip=load_blocked_ids())
-        _save_bot_state({"playlist_id": res["playlist_id"]})
+        pid = prep.result() if prep else dataapi.new_playlist(_bot_state().get("playlist_id"), title, note)
+        _save_bot_state({"playlist_id": pid})
+        res = dataapi.fill_playlist(pid, [s["video_id"] for s in picks], skip=load_blocked_ids())
     except Exception as e:
         _send(token, chat_id, f"⚠️ 建歌單失敗:{e}")
         return
@@ -138,13 +157,27 @@ def _do_pool(token, chat_id, pool, year, typ, count):
 def _run_agent(cfg, chat_id, query):
     token = cfg["telegram_token"]
     count = _wanted_count(query, cfg.get("count_default", 20))
-    _send(token, chat_id, f"🤖 agent 依「{query}」找歌中…(約 1–3 分鐘)")
+    mid = _send(token, chat_id, f"🤖 agent 依「{query}」找歌中…")
+    title, note = f"🤖 {query[:60]}", f"Telegram agent:{query}"
+    prep = _prepare_playlist(title, note)
+    names = {"filter_pool": "篩選歌曲池", "radio": "查 YTM 電台", "search_ytm": "搜尋 YTM"}
+
+    def on_step(step, action, n):
+        if mid:
+            _edit(token, chat_id, mid, f"🤖「{query}」\nstep {step}:{names.get(action, action)}…(候選 {n} 首)")
+
     try:
-        picks = agent_select.select(query, _pool(), count, cfg)
+        picks = agent_select.select(query, _pool(), count, cfg, on_step=on_step)
     except Exception as e:
         _send(token, chat_id, f"⚠️ 選曲失敗:{e}")
         return
-    _publish(token, chat_id, f"🤖 {query[:60]}", picks, f"Telegram agent:{query}")
+    if mid:
+        _edit(token, chat_id, mid, f"🤖「{query}」選出 {len(picks)} 首,建立歌單中…")
+    _publish(token, chat_id, title, picks, note, prep=prep)
+
+
+def _spawn(fn, *a):
+    threading.Thread(target=fn, args=a, daemon=True).start()
 
 
 # ─── 訊息 / 按鈕處理 ──────────────────────────────────────────────
@@ -157,7 +190,7 @@ def handle_message(cfg, chat_id, text, msg):
 
     # 回覆 agent 追問 → 直接當描述跑 agent
     if (msg.get("reply_to_message") or {}).get("text", "").startswith(AGENT_PROMPT):
-        _run_agent(cfg, chat_id, text)
+        _spawn(_run_agent, cfg, chat_id, text)
         return
 
     if low.startswith("/help") or low in ("/start", "help"):
@@ -166,7 +199,7 @@ def handle_message(cfg, chat_id, text, msg):
 
     if low.startswith("/rand"):
         if re.search(r"(?<!\d)\d{1,2}(?!\d)", text):
-            _do_rand(token, chat_id, pool, _wanted_count(text, 20))
+            _spawn(_do_rand, token, chat_id, pool, _wanted_count(text, 20))
         else:
             _send(token, chat_id, "🎲 隨機幾首?", _kb([[(str(n), f"r:{n}") for n in COUNTS]]))
         return
@@ -175,7 +208,7 @@ def handle_message(cfg, chat_id, text, msg):
         if rest:  # 帶參數 → 直接
             cand = llm_select._prefilter(rest, pool)
             picks = random.sample(cand, min(_wanted_count(text, 20), len(cand))) if cand else []
-            _publish(token, chat_id, f"🎯 {rest[:50]}", picks, f"Telegram /pool {rest}")
+            _spawn(_publish, token, chat_id, f"🎯 {rest[:50]}", picks, f"Telegram /pool {rest}")
         else:     # 互動:先選年份
             ys = _pool_years(pool)[:8]
             rows = [[(y, f"p:y:{y}") for y in ys[i:i + 4]] for i in range(0, len(ys), 4)]
@@ -185,7 +218,7 @@ def handle_message(cfg, chat_id, text, msg):
 
     if low.startswith(("/agent", "/vibe")):
         if rest:
-            _run_agent(cfg, chat_id, rest)
+            _spawn(_run_agent, cfg, chat_id, rest)
         else:
             _send(token, chat_id, AGENT_PROMPT, {"force_reply": True,
                                                  "input_field_placeholder": "例:放鬆的、像 YOASOBI"})
@@ -202,7 +235,7 @@ def handle_callback(cfg, chat_id, msg_id, data, cb_id):
     p = data.split(":")
     if p[0] == "r":                                   # r:N → 隨機
         _edit(token, chat_id, msg_id, f"🎲 隨機 {p[1]} 首,建立中…")
-        _do_rand(token, chat_id, pool, int(p[1]))
+        _spawn(_do_rand, token, chat_id, pool, int(p[1]))
     elif p[0] == "p" and p[1] == "y":                 # p:y:<Y> → 選片頭/片尾
         y = p[2]
         _edit(token, chat_id, msg_id, f"{'不限年份' if y == 'all' else y + ' 年'} → 要片頭還是片尾?",
@@ -215,7 +248,7 @@ def handle_callback(cfg, chat_id, msg_id, data, cb_id):
     elif p[0] == "p" and p[1] == "n":                 # p:n:<Y>:<T>:<N> → 建立
         y, t, n = p[2], p[3], int(p[4])
         _edit(token, chat_id, msg_id, f"🎯 {'全年' if y == 'all' else y}/{t} {n}首,建立中…")
-        _do_pool(token, chat_id, pool, y, t, n)
+        _spawn(_do_pool, token, chat_id, pool, y, t, n)
 
 
 def _set_commands(token):
