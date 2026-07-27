@@ -16,35 +16,66 @@ import shutil
 import sys
 from datetime import datetime
 
-from .matcher import resolve_video_id
+from .matcher import resolve_video_id, title_score
 from .config import AUTH_FILE, POOL_FILE, BACKUP_DIR
+
+
+def _clear_dups(yt, songs: list[dict]) -> int:
+    """一支影片只能是一首歌。撞號的群組裡只留跟影片真實標題最像的那首,其餘清掉 video_id 等重解。"""
+    by_vid: dict[str, list[dict]] = {}
+    for s in songs:
+        if s.get("video_id"):
+            by_vid.setdefault(s["video_id"], []).append(s)
+    dups = {v: g for v, g in by_vid.items() if len(g) > 1}
+    print(f"撞號的 video_id: {len(dups)} 支,牽涉 {sum(len(g) for g in dups.values())} 首歌")
+
+    cleared = 0
+    for vid, group in dups.items():
+        try:
+            real = yt.get_song(vid)["videoDetails"]["title"]
+        except Exception:
+            real = ""
+        keep = max(group, key=lambda s: title_score(s.get("title", ""), real)) if real else group[0]
+        for s in group:
+            if s is not keep:
+                s.pop("video_id", None)
+                cleared += 1
+    return cleared
 
 
 def main():
     parser = argparse.ArgumentParser(description="把 pool 的歌對應到真實 YTM videoId")
     parser.add_argument("--dry-run", action="store_true", help="只統計，不改檔")
     parser.add_argument("--sample", type=int, help="只處理前 N 首待解析的")
+    parser.add_argument("--refix-dups", action="store_true",
+                        help="把撞號(多首歌共用同一 video_id)的歌清掉 video_id 重解，只保留歌名最像的那首")
     args = parser.parse_args()
 
     with open(POOL_FILE) as f:
         pool = json.load(f)
     songs = pool.get("songs", [])
 
+    from ytmusicapi import YTMusic
+    yt = YTMusic(AUTH_FILE)
+
+    if args.refix_dups:
+        n = _clear_dups(yt, songs)
+        print(f"撞號清理：{n} 首歌的 video_id 已清除，將重新解析")
+
+    taken = {s["video_id"] for s in songs if s.get("video_id")}
     todo = [s for s in songs if not s.get("video_id")]
     print(f"待解析（無 video_id）: {len(todo)} / 全部 {len(songs)} 首")
     if args.sample:
         todo = todo[:args.sample]
         print(f"（--sample：只處理前 {len(todo)} 首）")
 
-    from ytmusicapi import YTMusic
-    yt = YTMusic(AUTH_FILE)
-
     filled = 0
     drop_titles = []
     for i, s in enumerate(todo, 1):
-        vid = resolve_video_id(yt, s)  # video_id 為 null，故實際會去搜尋
+        vid = resolve_video_id(yt, s, taken=taken)  # video_id 為 null，故實際會去搜尋
         if vid:
             s["video_id"] = vid
+            taken.add(vid)
             filled += 1
         else:
             s["_drop"] = True
