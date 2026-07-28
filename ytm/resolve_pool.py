@@ -20,6 +20,42 @@ from .matcher import resolve_video_id, title_score
 from .config import AUTH_FILE, POOL_FILE, BACKUP_DIR
 
 
+def _clear_mismatched(yt, songs: list[dict], threshold: float) -> int:
+    """驗證每首歌的 video_id 是否真的是那首歌,不像的清掉等重解。
+
+    分兩階段是為了省時間:Data API 一次能查 50 支影片(全 pool 只要 ~70 次呼叫),
+    但它只給日文標題(「恋はエクスプロージョン」),對羅馬字歌名會誤判;
+    所以只有第一階段不及格的才逐支問 ytmusicapi(慢,但它會給「Koi wa Explosion」)。
+    """
+    from .dataapi import _headers
+    import requests
+
+    have = [s for s in songs if s.get("video_id")]
+    titles: dict[str, str] = {}
+    ids = sorted({s["video_id"] for s in have})
+    for i in range(0, len(ids), 50):
+        r = requests.get("https://www.googleapis.com/youtube/v3/videos", headers=_headers(),
+                         params={"part": "snippet", "id": ",".join(ids[i:i + 50])})
+        for it in r.json().get("items", []):
+            titles[it["id"]] = it["snippet"]["title"]
+    suspect = [s for s in have if title_score(s["title"], titles.get(s["video_id"], "")) < threshold]
+    print(f"階段 1（Data API 標題）：{len(have) - len(suspect)} 首通過，{len(suspect)} 首待複查")
+
+    cleared = 0
+    for i, s in enumerate(suspect, 1):
+        try:
+            real = yt.get_song(s["video_id"])["videoDetails"]["title"]
+        except Exception:
+            real = ""
+        if title_score(s["title"], real) < threshold:
+            s.pop("video_id", None)
+            cleared += 1
+        if i % 100 == 0:
+            print(f"  複查 {i}/{len(suspect)}（已清 {cleared}）", flush=True)
+    print(f"階段 2（ytmusicapi 標題）：再通過 {len(suspect) - cleared} 首，清除 {cleared} 首")
+    return cleared
+
+
 def _clear_dups(yt, songs: list[dict]) -> int:
     """一支影片只能是一首歌。撞號的群組裡只留跟影片真實標題最像的那首,其餘清掉 video_id 等重解。"""
     by_vid: dict[str, list[dict]] = {}
@@ -49,6 +85,10 @@ def main():
     parser.add_argument("--sample", type=int, help="只處理前 N 首待解析的")
     parser.add_argument("--refix-dups", action="store_true",
                         help="把撞號(多首歌共用同一 video_id)的歌清掉 video_id 重解，只保留歌名最像的那首")
+    parser.add_argument("--repair", action="store_true",
+                        help="驗證每首歌的 video_id 是否真的是那首歌，不像的清掉重解（搜不到就刪）")
+    parser.add_argument("--threshold", type=float, default=0.75,
+                        help="--repair 的歌名相似度門檻（預設 0.75）")
     args = parser.parse_args()
 
     with open(POOL_FILE) as f:
@@ -61,6 +101,10 @@ def main():
     if args.refix_dups:
         n = _clear_dups(yt, songs)
         print(f"撞號清理：{n} 首歌的 video_id 已清除，將重新解析")
+
+    if args.repair:
+        n = _clear_mismatched(yt, songs, args.threshold)
+        print(f"錯配清理：{n} 首歌的 video_id 已清除，將重新解析")
 
     taken = {s["video_id"] for s in songs if s.get("video_id")}
     todo = [s for s in songs if not s.get("video_id")]
@@ -88,6 +132,11 @@ def main():
         print(f"    ✂️  {t}")
     if len(drop_titles) > 15:
         print(f"    …還有 {len(drop_titles) - 15} 首")
+    if drop_titles:
+        droplist = os.path.join(BACKUP_DIR, f"dropped-{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+        with open(droplist, "w") as f:
+            f.write("\n".join(drop_titles) + "\n")
+        print(f"    完整清單：{droplist}")
 
     if args.dry_run:
         for s in todo:

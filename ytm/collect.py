@@ -7,10 +7,12 @@
   python3 collect.py --all-seasons       # 收集所有歷史季
   python3 collect.py --artists-only      # 只收集歌手
   python3 collect.py --anime-only        # 只收集新番
+  python3 collect.py --fill-anime-jp     # 只補既有資料的日文作品名
 """
 
 import json
 import os
+import re
 import sys
 import urllib.request
 import urllib.parse
@@ -25,6 +27,52 @@ def api_get(url: str) -> dict:
     req = urllib.request.Request(url, headers={"User-Agent": "anime-playlist-gen/1.0"})
     with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read())
+
+
+_JP_CHARS = re.compile(r"[぀-ヿ一-鿿]")
+
+
+def _jp_synonym(anime: dict) -> str | None:
+    """AnimeThemes 的 animesynonyms 裡撈日文作品名(約八成作品有)。
+
+    pool 的歌名與作品名都是羅馬字,但 YTM 目錄以日文為主;有日文作品名,
+    resolve_pool 才能多搜一輪「日文作品名 + OP/ED」,撈到只有日文標題的曲子。
+    """
+    for syn in anime.get("animesynonyms", []):
+        text = syn.get("text") or ""
+        if _JP_CHARS.search(text):
+            return text
+    return None
+
+
+def fill_anime_jp(pool: dict) -> int:
+    """替 pool 裡既有的歌補上 anime_jp（新抓的歌由 collect_anime_themes 直接帶）。"""
+    anime_songs = [s for s in pool["songs"] if s.get("anime")]
+    seasons = sorted({str(s["season"]) for s in anime_songs if s.get("season")})
+    jp: dict[str, str] = {}
+    for sea in seasons:
+        parts = sea.split(" ")
+        page = 1
+        while True:
+            params = {"filter[year]": parts[0], "include": "animesynonyms",
+                      "page[size]": "100", "page[number]": str(page)}
+            if len(parts) > 1:
+                params["filter[season]"] = parts[1]
+            data = api_get("https://api.animethemes.moe/anime?" + urllib.parse.urlencode(params))
+            for anime in data.get("anime", []):
+                name = _jp_synonym(anime)
+                if name:
+                    jp.setdefault(anime["name"], name)
+            if not data.get("links", {}).get("next"):
+                break
+            page += 1
+        print(f"  {sea}: 累計 {len(jp)} 個日文名", flush=True)
+    filled = 0
+    for s in anime_songs:
+        if s["anime"] in jp and not s.get("anime_jp"):
+            s["anime_jp"] = jp[s["anime"]]
+            filled += 1
+    return filled
 
 
 def get_current_season() -> tuple[str, int]:
@@ -104,7 +152,7 @@ def collect_anime_themes(season: str, year: int) -> list[dict]:
         params = {
             "filter[year]": str(year),
             "filter[season]": season,
-            "include": "animethemes.song.artists",
+            "include": "animethemes.song.artists,animesynonyms",
             "page[size]": "50",
             "page[number]": str(page),
             "sort": "id",
@@ -113,6 +161,7 @@ def collect_anime_themes(season: str, year: int) -> list[dict]:
         data = api_get(url)
         for anime in data.get("anime", []):
             anime_name = anime["name"]
+            anime_jp = _jp_synonym(anime)
             for theme in anime.get("animethemes", []):
                 if theme["type"] not in ("OP", "ED"):
                     continue
@@ -121,7 +170,7 @@ def collect_anime_themes(season: str, year: int) -> list[dict]:
                 artist_names = ", ".join(a.get("name", "") for a in artists)
                 if not song.get("title"):
                     continue
-                songs.append({
+                entry = {
                     "title": song["title"],
                     "artist": artist_names,
                     "source": "anime",
@@ -129,7 +178,10 @@ def collect_anime_themes(season: str, year: int) -> list[dict]:
                     "season": f"{year} {season}",
                     "type": theme["type"],
                     "video_id": None,
-                })
+                }
+                if anime_jp:
+                    entry["anime_jp"] = anime_jp
+                songs.append(entry)
         if not data.get("links", {}).get("next"):
             break
         page += 1
@@ -200,9 +252,19 @@ def main():
     parser.add_argument("--all-seasons", action="store_true", help="收集所有歷史季")
     parser.add_argument("--artists-only", action="store_true")
     parser.add_argument("--anime-only", action="store_true")
+    parser.add_argument("--fill-anime-jp", action="store_true",
+                        help="只替既有 pool 補日文作品名（resolve_pool 用它多搜一輪）")
     args = parser.parse_args()
 
     pool = load_pool()
+
+    if args.fill_anime_jp:
+        print("🇯🇵 補日文作品名...")
+        n = fill_anime_jp(pool)
+        save_pool(pool)
+        have = sum(1 for s in pool["songs"] if s.get("anime_jp"))
+        print(f"\n✅ 新增 {n} 首，pool 現有 {have} 首帶日文作品名")
+        return
 
     current_season, current_year = get_current_season()
 
