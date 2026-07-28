@@ -5,6 +5,7 @@
   /rand  → 跳按鈕選數量 → 純隨機(最快,免 AI)
   /pool  → 跳按鈕選 年份 → OP/ED → 數量 → 篩選(免 AI)
   /agent → 追問描述(回覆一句)→ AI 依氛圍/相似找歌(會查 YTM 電台,較慢)
+  /cookie → 檢查 YTM cookie 是否還有效（失效時給重新擷取的按鈕）
   /help  → 說明
 也可直接帶參數快速執行:/rand 30、/pool 2024 OP 15、/agent 放鬆的。
 沒有指令的純文字 → 回錯誤提示(agent 需用 /agent 或回覆追問)。
@@ -14,7 +15,8 @@ long-poll(不需對外開埠),只回應設定的 chat_id。建歌單走 Data API
 設定檔 data/bot_config.json(gitignored):
   {"telegram_token":"...","allowed_chat_id":123,
    "llm_url":"https://opencode.ai/zen/go/v1/chat/completions",
-   "llm_api_key":"...","model":"deepseek-v4-flash","count_default":20}
+   "llm_api_key":"...","model":"deepseek-v4-flash","count_default":20,
+   "firefox_url":"http://nas:5800","firefox_profile":"/app/ff-profile"}
 用法: python3 -m ytm.telegram_bot
 """
 import json
@@ -29,7 +31,7 @@ import requests
 
 from .config import POOL_FILE, BOT_CONFIG_FILE, BOT_STATE
 from .blocklist import load_blocked_ids
-from . import agent_select, dataapi, llm_select
+from . import agent_select, cookie, dataapi, llm_select
 
 API = "https://api.telegram.org/bot{token}/{method}"
 COUNTS = [10, 20, 30, 50]
@@ -39,6 +41,7 @@ HELP = (
     "/rand — 隨機來一批(最快)\n"
     "/pool — 挑指定年份、片頭(OP)或片尾(ED)的歌\n"
     "/agent — 用 AI 依心情/風格找歌(較慢,約 1–3 分)\n"
+    "/cookie — 檢查 YTM 登入狀態\n"
     "/help — 這個說明\n\n"
     "老手也可直接打:/rand 30、/pool 2024 OP 15、/agent 放鬆的"
 )
@@ -180,6 +183,55 @@ def _spawn(fn, *a):
     threading.Thread(target=fn, args=a, daemon=True).start()
 
 
+# ─── cookie 生命週期 ─────────────────────────────────────────────
+
+COOKIE_CHECK_EVERY = 6 * 3600
+
+
+def _cookie_status(cfg, chat_id, verbose=True):
+    alive, msg = cookie.check()
+    if alive:
+        if verbose:
+            _send(cfg["telegram_token"], chat_id, f"✅ cookie 正常：{msg}")
+        return True
+    url = cfg.get("firefox_url", "（未設定 firefox_url）")
+    _send(cfg["telegram_token"], chat_id,
+          f"⚠️ YTM cookie 失效了（{msg}）\n\n"
+          f"1. 開 {url} 登入 music.youtube.com\n"
+          f"2. 登入完成後按下面的按鈕",
+          _kb([[("我登入好了，重新擷取", "c:extract")]]))
+    return False
+
+
+def _cookie_extract(cfg, chat_id):
+    token = cfg["telegram_token"]
+    prof = cfg.get("firefox_profile")
+    if not prof:
+        _send(token, chat_id, "⚠️ bot_config.json 沒設 firefox_profile（Firefox profile 或 cookies.sqlite 路徑）")
+        return
+    try:
+        cookie.save(cookie.extract(prof))
+    except Exception as e:
+        _send(token, chat_id, f"⚠️ 擷取失敗：{e}")
+        return
+    alive, msg = cookie.check()
+    _send(token, chat_id, f"{'✅ cookie 已更新' if alive else '⚠️ 擷取到了但仍無法認證'}：{msg}")
+
+
+def _cookie_watch(cfg, chat_id):
+    """定期檢查;只在「從正常變失效」時推播一次,避免每 6 小時洗一次訊息。"""
+    was_alive = True
+    while True:
+        time.sleep(COOKIE_CHECK_EVERY)
+        try:
+            alive, _ = cookie.check()
+            if was_alive and not alive:
+                _cookie_status(cfg, chat_id, verbose=False)
+            was_alive = alive
+        except Exception as e:
+            print("cookie watch error:", e, flush=True)
+
+
 # ─── 訊息 / 按鈕處理 ──────────────────────────────────────────────
 
 def handle_message(cfg, chat_id, text, msg):
@@ -191,6 +243,10 @@ def handle_message(cfg, chat_id, text, msg):
     # 回覆 agent 追問 → 直接當描述跑 agent
     if (msg.get("reply_to_message") or {}).get("text", "").startswith(AGENT_PROMPT):
         _spawn(_run_agent, cfg, chat_id, text)
+        return
+
+    if low.startswith("/cookie"):
+        _spawn(_cookie_status, cfg, chat_id)
         return
 
     if low.startswith("/help") or low in ("/start", "help"):
@@ -236,6 +292,9 @@ def handle_callback(cfg, chat_id, msg_id, data, cb_id):
     if p[0] == "r":                                   # r:N → 隨機
         _edit(token, chat_id, msg_id, f"🎲 隨機 {p[1]} 首,建立中…")
         _spawn(_do_rand, token, chat_id, pool, int(p[1]))
+    elif p[0] == "c" and p[1] == "extract":     # c:extract → 重新擷取 cookie
+        _edit(token, chat_id, msg_id, "🍪 從 Firefox profile 擷取中…")
+        _spawn(_cookie_extract, cfg, chat_id)
     elif p[0] == "p" and p[1] == "y":                 # p:y:<Y> → 選片頭/片尾
         y = p[2]
         _edit(token, chat_id, msg_id, f"{'不限年份' if y == 'all' else y + ' 年'} → 要片頭還是片尾?",
@@ -256,6 +315,7 @@ def _set_commands(token):
         {"command": "rand", "description": "隨機來一批(最快)"},
         {"command": "pool", "description": "挑年份・片頭(OP)/片尾(ED)"},
         {"command": "agent", "description": "用 AI 依心情/風格找歌(較慢)"},
+        {"command": "cookie", "description": "檢查 YTM cookie 狀態"},
         {"command": "help", "description": "使用說明"},
     ]
     try:
@@ -269,6 +329,8 @@ def main():
     token = cfg["telegram_token"]
     allowed = cfg.get("allowed_chat_id")
     _set_commands(token)
+    if allowed:
+        _spawn(_cookie_watch, cfg, allowed)
     offset = None
     print("bot 啟動,long-poll 中… (Ctrl-C 停止)", flush=True)
     while True:
