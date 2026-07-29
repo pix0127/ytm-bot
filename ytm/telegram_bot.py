@@ -205,10 +205,7 @@ def _cookie_status(cfg, chat_id, verbose=True):
 
 def _cookie_extract(cfg, chat_id):
     token = cfg["telegram_token"]
-    prof = cfg.get("firefox_profile")
-    if not prof:
-        _send(token, chat_id, "⚠️ bot_config.json 沒設 firefox_profile（Firefox profile 或 cookies.sqlite 路徑）")
-        return
+    prof = cfg.get("firefox_profile") or cookie.default_profile()
     try:
         cookie.save(cookie.extract(prof))
     except Exception as e:
@@ -219,11 +216,18 @@ def _cookie_extract(cfg, chat_id):
 
 
 def _cookie_watch(cfg, chat_id):
-    """定期檢查;只在「從正常變失效」時推播一次,避免每 6 小時洗一次訊息。"""
+    """定期同步 + 檢查。
+
+    先看 Firefox profile 有沒有更新的 cookie 可以撈(平常的主要路徑,不必通知你),
+    撈完才檢查;只在「從正常變失效」時推播一次,避免每 6 小時洗一次訊息。
+    """
     was_alive = True
     while True:
         time.sleep(COOKIE_CHECK_EVERY)
         try:
+            synced = cookie.sync_if_newer(cfg.get("firefox_profile"))
+            if synced:
+                print("[cookie]", synced, flush=True)
             alive, _ = cookie.check()
             if was_alive and not alive:
                 _cookie_status(cfg, chat_id, verbose=False)

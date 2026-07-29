@@ -41,6 +41,33 @@ HEADERS = {
 REQUIRED = ("SAPISID", "__Secure-1PSID", "__Secure-1PSIDTS")
 
 
+def default_profile() -> str:
+    """預設去 deploy/nas-firefox/ff-profile 找，免得還要設定一次路徑。"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.environ.get("YTM_FF_PROFILE") or os.path.join(root, "deploy", "nas-firefox", "ff-profile")
+
+
+def sync_if_newer(path: str | None = None) -> str | None:
+    """profile 的 cookie 比 browser.json 新就撈過來。
+
+    這是平常的主要路徑:讓那個 Firefox 定期自己開一下 music.youtube.com,
+    它會替自己輪替憑證,我們只要跟著同步——不必等失效、不必人工介入。
+    回同步後的訊息;沒事做或沒得同步就回 None。
+    """
+    path = path or default_profile()
+    src = find_sqlite(path)
+    if not src:
+        return None
+    if os.path.exists(AUTH_FILE) and os.path.getmtime(src) <= os.path.getmtime(AUTH_FILE):
+        return None
+    try:
+        headers = extract(src)
+    except ValueError:
+        return None  # profile 自己也沒登入,交給 check() 去觸發通知
+    save(headers)
+    return f"已從 Firefox profile 同步新的 cookie（{os.path.basename(src)}）"
+
+
 def find_sqlite(path: str) -> str | None:
     """給 sqlite 檔就直接用;給目錄就往下找 cookies.sqlite（取最新的那個 profile）。
 
