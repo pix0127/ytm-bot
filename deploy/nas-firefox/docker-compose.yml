@@ -12,11 +12,12 @@ services:
       - "5800:5800"                    # 網頁 GUI（建議只開內網）
     volumes:
       - ./ff-profile:/config           # Firefox profile 持久化（登入狀態存這）
-    # DS423+ 原廠只有 2GB RAM，而 shm 是 tmpfs（算進 RAM）：
-    # 1gb + Firefox + DSM 會把 2GB 吃光。有加到 6GB 才適合調回 1gb。
-    shm_size: "256m"
+    shm_size: "1gb"                    # 2GB RAM 的機型要降到 256m，否則會 OOM
     environment:
       - TZ=Asia/Taipei
+      # 一開容器就自己載入 YTM：省掉手動打網址，也讓「定期開一下續期 cookie」
+      # 變成只要 docker start 就完成（瀏覽器載入頁面才會向 Google 輪替憑證）。
+      - FF_OPEN_URL=https://music.youtube.com/
       # 強烈建議開啟存取保護（它裝著你的 Google session）：
       # - WEB_AUTHENTICATION=1
       # - WEB_AUTHENTICATION_USERNAME=you
