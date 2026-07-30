@@ -3,7 +3,44 @@
 適用：NAS 24 小時常開，跑 Telegram bot 與排程；cookie 由同一台 NAS 上的按需 Firefox 容器提供。
 不需要另一台 PC。
 
-## 一次性設定
+## 全部指令一次看完
+
+先準備：Telegram bot token（BotFather）、Google Cloud 的 OAuth client（**TV and Limited
+Input devices** 型）、一個 LLM API key。下面每一步的說明見後面各節。
+
+```bash
+cd /volume1/docker/ytm-tools        # 專案放這，data/ 設成私人共享資料夾
+D="docker run --rm -it -v $PWD/data:/app/data ytm-tools:latest python -m"
+
+# 2. build
+docker build -f deploy/Dockerfile -t ytm-tools:latest .
+
+# 3. 產設定檔（必須在啟動 bot 之前，原因見第 3 節）
+$D ytm.setup
+
+# 4. OAuth 授權（先把 oauth_client.json 放進 data/）
+$D ytm.oauth
+
+# 5. 啟動 bot，然後對它說句話讓它綁定聊天室
+docker run -d --name ytm-bot --restart unless-stopped \
+  -v $PWD/ytm:/app/ytm -v $PWD/data:/app/data \
+  -v $PWD/deploy/nas-firefox/ff-profile:/app/ff-profile:ro \
+  ytm-tools:latest python -m ytm.telegram_bot
+
+# 6. 建歌曲池（動畫歌免認證）
+E="docker exec -w /app ytm-bot python -m"
+$E ytm.collect --all-seasons && $E ytm.collect --fill-anime-jp && $E ytm.resolve_pool
+
+# 7. 登入 YT Music（先在 compose 設 WEB_AUTHENTICATION 密碼）
+(cd deploy/nas-firefox && docker compose up -d)
+#    手機開 http://<NAS>:5800 登入 → Telegram 打 /cookie → 按「我登入好了」
+#    然後補歌手歌：
+$E ytm.collect --artists-only && $E ytm.resolve_pool
+
+# 8. 裝三個排程（warm / ensure / reap，內容見第 8 節）
+```
+
+## 一次性設定（逐步說明）
 
 ### 1. 放專案與資料
 

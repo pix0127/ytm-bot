@@ -105,7 +105,7 @@ bot 每 6 小時  profile 有新 cookie 就自動同步到 browser.json
 排程本身也有心跳監控——`firefox-ctl.sh` 每次執行會寫時間戳，bot 發現心跳停了會通知你。
 （DSM 重寫 `/etc/crontab` 時會把排程清掉，那是靜默失敗。）
 
-部署步驟見 [docs/SETUP.md](docs/SETUP.md)。
+部署步驟見 [docs/SETUP.md](docs/SETUP.md)——開頭有一段「全部指令一次看完」可以直接複製貼上。
 
 ## 結構
 
