@@ -5,8 +5,7 @@
 
 ## 全部指令一次看完
 
-先準備：Telegram bot token（BotFather）、Google Cloud 的 OAuth client（**TV and Limited
-Input devices** 型）、一個 LLM API key。下面每一步的說明見後面各節。
+先準備：Telegram bot token（BotFather）、一個 LLM API key。下面每一步的說明見後面各節。
 
 ```bash
 cd /volume1/docker/ytm-tools        # 專案放這，data/ 設成私人共享資料夾
@@ -18,26 +17,23 @@ docker build -f deploy/Dockerfile -t ytm-tools:latest .
 # 3. 產設定檔（必須在啟動 bot 之前，原因見第 3 節）
 $D ytm.setup
 
-# 4. OAuth 授權（先把 oauth_client.json 放進 data/）
-$D ytm.oauth
-
-# 5. 啟動 bot，然後對它說句話讓它綁定聊天室
+# 4. 啟動 bot，然後對它說句話讓它綁定聊天室
 docker run -d --name ytm-bot --restart unless-stopped \
   -v $PWD/ytm:/app/ytm -v $PWD/data:/app/data \
   -v $PWD/deploy/nas-firefox/ff-profile:/app/ff-profile:ro \
   ytm-tools:latest python -m ytm.telegram_bot
 
-# 6. 建歌曲池（動畫歌免認證）
+# 5. 建歌曲池（動畫歌免認證）
 E="docker exec -w /app ytm-bot python -m"
 $E ytm.collect --all-seasons && $E ytm.collect --fill-anime-jp && $E ytm.resolve_pool
 
-# 7. 登入 YT Music（先在 compose 設 WEB_AUTHENTICATION 密碼）
+# 6. 登入 YT Music（先在 compose 設 WEB_AUTHENTICATION 密碼）
 (cd deploy/nas-firefox && docker compose up -d)
 #    手機開 http://<NAS>:5800 登入 → Telegram 打 /cookie → 按「我登入好了」
 #    然後補歌手歌：
 $E ytm.collect --artists-only && $E ytm.resolve_pool
 
-# 8. 裝三個排程（warm / ensure / reap，內容見第 8 節）
+# 7. 裝三個排程（warm / ensure / reap，內容見第 7 節）
 ```
 
 ## 一次性設定（逐步說明）
@@ -56,9 +52,7 @@ $E ytm.collect --artists-only && $E ytm.resolve_pool
 | 檔案 | 來源 |
 |---|---|
 | `bot_config.json` | 第 3 步用 `ytm.setup` 互動產生（或照 `deploy/bot_config.example.json` 手填） |
-| `oauth_client.json` | Google Cloud 的 OAuth client，見 [OAUTH.md](OAUTH.md) |
-| `oauth.json` | 第 4 步跑 `ytm.oauth` 產生（之後自動 refresh） |
-| `browser.json` | 不用手動準備，第 6 步會自動產生 |
+| `browser.json` | 不用手動準備，第 6 步會自動產生（YT Music 登入憑證） |
 
 ### 2. Build image
 
@@ -83,18 +77,7 @@ docker run --rm -it -v /volume1/docker/ytm-tools/data:/app/data \
 
 `allowed_chat_id` 留空即可——你對 bot 說第一句話時它會自己綁定並寫檔。
 
-### 4. OAuth 授權（建歌單用）
-
-先把 Google Cloud 的 OAuth client 存成 `data/oauth_client.json`（見 [OAUTH.md](OAUTH.md)），然後：
-
-```bash
-docker run --rm -it -v /volume1/docker/ytm-tools/data:/app/data \
-  ytm-tools:latest python -m ytm.oauth
-```
-
-它會印出網址與代碼，你在瀏覽器授權一次，token 存進 `data/oauth.json`，之後自動 refresh。
-
-### 5. 啟動 bot
+### 4. 啟動 bot
 
 ```bash
 docker run -d --name ytm-bot --restart unless-stopped \
@@ -109,7 +92,7 @@ docker run -d --name ytm-bot --restart unless-stopped \
 
 現在對 bot 說句話，它會回「已綁定這個聊天室」加上指令說明。
 
-### 6. 建立歌曲池
+### 5. 建立歌曲池
 
 **這步不能跳過**——沒有 `pool.json`，bot 雖然會啟動，但所有選曲指令都無法使用
 （它會回覆該跑哪些指令）。動畫歌不需要任何認證就能抓：
@@ -121,14 +104,14 @@ $E ytm.collect --fill-anime-jp    # 補日文作品名，resolve 時用得到
 $E ytm.resolve_pool               # 歌名 → videoId
 ```
 
-訂閱歌手的部分需要有效 cookie，所以等第 7 步登入完成後再跑：
+訂閱歌手的部分需要有效 cookie，所以等第 6 步登入完成後再跑：
 
 ```bash
 $E ytm.collect --artists-only
 $E ytm.resolve_pool
 ```
 
-### 7. 登入 YouTube Music（產生 cookie）
+### 6. 登入 YouTube Music（產生 cookie）
 
 **先設密碼。** 編輯 `deploy/nas-firefox/docker-compose.yml`，把 `WEB_AUTHENTICATION` 三行的註解
 拿掉並填上帳密——那個網頁裝著一個已登入的 Google 帳號，沒密碼等於同網段誰都能用。
@@ -143,7 +126,7 @@ YouTube Music，在裡面登入即可。登入完成後在 Telegram 打 `/cookie
 
 之後就不用再管它：bot 每 6 小時會自己從 Firefox profile 同步新 cookie。
 
-### 8. 裝排程
+### 7. 裝排程
 
 `firefox-ctl.sh` 管理那個容器的生命週期。三個排程加進 `/etc/crontab`（**tab 分隔**，DSM 要求）：
 
@@ -166,13 +149,13 @@ YouTube Music，在裡面登入即可。登入完成後在 Telegram 打 `/cookie
 屆時把三行加回即可。也可以改用任務排程 UI 建三個「使用者定義的指令碼」任務（使用者選 root），
 那樣不會被覆寫，但綁 Synology。
 
-### 9.（選配）每日隨選歌單
+### 8.（選配）每日隨選歌單
 
 ```
 0	8	*	*	*	root	bash /volume1/docker/ytm-tools/deploy/run_daily.sh
 ```
 
-`run_daily.sh` 走 OAuth + Data API v3，不需要 cookie。記得改裡面的 `PROJECT_DIR`。
+`run_daily.sh` 需要有效的 cookie。記得改裡面的 `PROJECT_DIR`。
 
 ## 日常維護
 
@@ -186,5 +169,5 @@ YouTube Music，在裡面登入即可。登入完成後在 Telegram 打 `/cookie
 
 ## 換平台
 
-只有第 8 步綁 Synology（`/etc/crontab` 與 `synoservice`）。其他都是標準 Docker：
+只有第 7 步綁 Synology（`/etc/crontab` 與 `synoservice`）。其他都是標準 Docker：
 兩個容器 + 幾個 volume。在別的 Linux 上把排程換成一般 cron 或 systemd timer 即可。

@@ -16,8 +16,7 @@ Telegram: /agent 放鬆的睡前歌
 - **歌手歌**來自你在 YouTube Music 訂閱的歌手熱門曲
 - videoId 由 `resolve_pool` 事先解析好，並保證一支影片只對應一首歌
 
-事先解析是整個架構的關鍵。因為 videoId 已經有了，`daily_pick` 才能走**官方 Data API v3 + OAuth**
-（自動 refresh、免 cookie、適合排程）；查詢時也不必再打搜尋 API。
+事先解析讓查詢時不必再打搜尋 API：選好歌就直接把 videoId 丟進歌單，20 首約 3 秒。
 
 ## 介面
 
@@ -49,7 +48,7 @@ python -m ytm.collect --fill-anime-jp    # 補日文作品名（resolve 時會�
 python -m ytm.resolve_pool               # 把沒有 videoId 的歌解析出來
 python -m ytm.resolve_pool --repair      # 驗證既有 videoId，不對的重解（見下）
 python -m ytm.cookie --check             # YT Music 登入狀態
-python -m ytm.daily_pick --count 20      # 每日隨選歌單（OAuth，免 cookie）
+python -m ytm.daily_pick --count 20      # 每日隨選歌單
 python -m ytm.yearly_playlists           # 各年度歌單（--year 2026 / --update）
 python -m ytm.anime_playlist_gen         # 本季新番歌單
 python -m ytm.prune_disliked             # 把按爛的歌從歌單與 pool 移除
@@ -75,14 +74,16 @@ YT Music 沒有該曲時，第一名必然是同歌手的別首歌，收下來�
 `resolve_pool --repair` 用同一套規則驗證既有資料：先用 Data API 批次抓標題（一次 50 支）篩掉
 明顯正常的，剩下的才逐支問 ytmusicapi（它會給羅馬字標題），真的不像才重解、解不出來才刪。
 
-## 兩套認證，各有原因
+## 認證：只有一套
 
-| 用途 | 認證 | 為什麼 |
-|---|---|---|
-| `daily_pick` | OAuth + Data API v3 | 每日用量小、只用存好的 videoId、token 自動 refresh，最適合無人值守 |
-| 其餘全部 | browser cookie | 需要 YT Music 的歌曲目錄搜尋，而那個內部 API **不吃 OAuth**（回 HTTP 400） |
+全部功能都走 ytmusicapi 的 browser cookie（`data/browser.json`）。
 
-細節與配額計算見 [docs/OAUTH.md](docs/OAUTH.md)。
+先前建歌單走官方 Data API v3 + OAuth，已移除——它的 `playlistItems.insert` 一次只能加一首、
+而且對同一歌單的寫入有鎖無法並行（並行會回 409 並靜默掉歌），20 首要約 20 秒；
+ytmusicapi 的 `add_playlist_items` 接受整批，同樣 20 首約 3 秒。少一套認證也少一堆設定
+（不用建 Google Cloud 專案、OAuth client、device flow）。
+
+代價是 cookie 失效時建歌單也會失敗，所以下面那套自動續期機制變得更重要。
 
 ### cookie 只能由原本登入的瀏覽器續期
 
@@ -118,8 +119,7 @@ ytm/
   resolve_pool.py    歌名 → videoId，含 --repair 驗證修補
   matcher.py         比對邏輯（羅馬字轉寫、歌名分段、歌手閘門）
   cookie.py          browser.json 的健康檢查與從 Firefox profile 擷取
-  dataapi.py         官方 Data API v3 的歌單寫入
-  oauth.py           device flow 授權與 token refresh
+  playlist.py        YT Music 歌單寫入（建/刪/整批加曲）
   setup.py           互動式產生 bot_config.json
   config.py  blocklist.py  daily_pick.py  yearly_playlists.py
   anime_playlist_gen.py  prune_disliked.py
@@ -127,9 +127,9 @@ deploy/
   Dockerfile  run_daily.sh  bot_config.example.json
   nas-firefox/       按需 Firefox 容器 + 生命週期腳本（firefox-ctl.sh）
 data/                執行時資料與機密（gitignored）
-  pool.json  browser.json  bot_config.json  oauth.json  blocklist.json
+  pool.json  browser.json  bot_config.json  blocklist.json
   state/  backups/
-docs/                SETUP.md（部署）、OAUTH.md（兩個 API 的差異）
+docs/                SETUP.md（部署）
 ```
 
 ## 需要知道的限制

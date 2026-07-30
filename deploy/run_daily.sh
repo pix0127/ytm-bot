@@ -1,7 +1,7 @@
 #!/bin/bash
-# Synology 任務排程器每天呼叫：OAuth / Data API v3 版 daily_pick（免 cookie）。
-# 前置：先在任一機器跑過 `python -m ytm.oauth` 完成授權，token 存在 data/oauth.json。
-# data/ 內含 oauth.json + oauth_client.json，OAuth 自動 refresh，不需 browser.json。
+# Synology 任務排程器每天呼叫 daily_pick。
+# 前置：data/ 裡要有有效的 browser.json（見 docs/SETUP.md）。
+
 
 set -e
 

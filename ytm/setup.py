@@ -82,16 +82,7 @@ def main():
     if not cfg.get("allowed_chat_id"):
         print("   allowed_chat_id 還是空的——對 bot 說第一句話時它會自己記住你。")
 
-    missing = [n for n in ("oauth_client.json", "oauth.json")
-               if not os.path.exists(os.path.join(DATA_DIR, n))]
-    if missing:
-        print(f"\n還缺 {', '.join(missing)}（建歌單要用）：")
-        if "oauth_client.json" in missing:
-            print("   1. Google Cloud 建「TV and Limited Input devices」型 OAuth client，啟用 YouTube Data API v3")
-            print(f"   2. 存成 {os.path.join(DATA_DIR, 'oauth_client.json')}：{{\"client_id\":…,\"client_secret\":…}}")
-        print("   3. python -m ytm.oauth   ← 一次性授權，之後自動 refresh")
-        print("   細節見 docs/OAUTH.md")
-
-
-if __name__ == "__main__":
-    main()
+    if not os.path.exists(os.path.join(DATA_DIR, "browser.json")):
+        print("\n還缺 browser.json（YT Music 登入憑證，搜尋與建歌單都要用）：")
+        print("   在 NAS 的 Firefox 容器登入一次，然後在 Telegram 打 /cookie 按按鈕")
+        print("   細節見 docs/SETUP.md")

@@ -10,7 +10,7 @@
 也可直接帶參數快速執行:/rand 30、/pool 2024 OP 15、/agent 放鬆的。
 沒有指令的純文字 → 回錯誤提示(agent 需用 /agent 或回覆追問)。
 
-long-poll(不需對外開埠),只回應設定的 chat_id。建歌單走 Data API v3(免 cookie)。
+long-poll(不需對外開埠),只回應設定的 chat_id。
 
 設定檔 data/bot_config.json(gitignored):
   {"telegram_token":"...","allowed_chat_id":123,
@@ -31,7 +31,7 @@ import requests
 
 from .config import POOL_FILE, BOT_CONFIG_FILE, BOT_STATE, STATE_DIR
 from .blocklist import load_blocked_ids
-from . import agent_select, cookie, dataapi, llm_select
+from . import agent_select, cookie, llm_select, playlist
 
 API = "https://api.telegram.org/bot{token}/{method}"
 COUNTS = [10, 20, 30, 50]
@@ -162,7 +162,7 @@ def _pool_years(pool):
 
 def _prepare_playlist(title, note):
     """先把新歌單開好(刪舊+開新,約 2s)。不需要 picks,所以能跟選曲並行。"""
-    return _prep_pool.submit(dataapi.new_playlist, _bot_state().get("playlist_id"), title, note)
+    return _prep_pool.submit(playlist.new_playlist, _bot_state().get("playlist_id"), title, note)
 
 
 def _publish(token, chat_id, title, picks, note, prep=None):
@@ -170,9 +170,9 @@ def _publish(token, chat_id, title, picks, note, prep=None):
         _send(token, chat_id, "找不到符合的歌,換個條件試試。")
         return
     try:
-        pid = prep.result() if prep else dataapi.new_playlist(_bot_state().get("playlist_id"), title, note)
+        pid = prep.result() if prep else playlist.new_playlist(_bot_state().get("playlist_id"), title, note)
         _save_bot_state({"playlist_id": pid})
-        res = dataapi.fill_playlist(pid, [s["video_id"] for s in picks], skip=load_blocked_ids())
+        res = playlist.fill_playlist(pid, [s["video_id"] for s in picks], skip=load_blocked_ids())
     except Exception as e:
         _send(token, chat_id, f"⚠️ 建歌單失敗:{_redact(e, token)}")
         return

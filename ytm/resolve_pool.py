@@ -23,26 +23,14 @@ from .config import AUTH_FILE, POOL_FILE, BACKUP_DIR
 def _clear_mismatched(yt, songs: list[dict], threshold: float) -> int:
     """驗證每首歌的 video_id 是否真的是那首歌,不像的清掉等重解。
 
-    分兩階段是為了省時間:Data API 一次能查 50 支影片(全 pool 只要 ~70 次呼叫),
-    但它只給日文標題(「恋はエクスプロージョン」),對羅馬字歌名會誤判;
-    所以只有第一階段不及格的才逐支問 ytmusicapi(慢,但它會給「Koi wa Explosion」)。
+    只能逐支問 ytmusicapi(它會給「決意の唄 - Ketsui no Uta」這種含羅馬字的標題,
+    比對得準)。先前有一段用官方 Data API 一次查 50 支來預篩,但那需要 OAuth,
+    已隨 OAuth 一起移除——代價是這裡變慢,4000 首約要一小時,所以它是偶爾跑的維護指令。
     """
-    from .dataapi import _headers
-    import requests
-
     have = [s for s in songs if s.get("video_id")]
-    titles: dict[str, str] = {}
-    ids = sorted({s["video_id"] for s in have})
-    for i in range(0, len(ids), 50):
-        r = requests.get("https://www.googleapis.com/youtube/v3/videos", headers=_headers(),
-                         params={"part": "snippet", "id": ",".join(ids[i:i + 50])})
-        for it in r.json().get("items", []):
-            titles[it["id"]] = it["snippet"]["title"]
-    suspect = [s for s in have if title_score(s["title"], titles.get(s["video_id"], "")) < threshold]
-    print(f"階段 1（Data API 標題）：{len(have) - len(suspect)} 首通過，{len(suspect)} 首待複查")
-
+    print(f"逐支驗證 {len(have)} 首（每首約 1 秒，可以先用 --sample 試小批）", flush=True)
     cleared = 0
-    for i, s in enumerate(suspect, 1):
+    for i, s in enumerate(have, 1):
         try:
             real = yt.get_song(s["video_id"])["videoDetails"]["title"]
         except Exception:
@@ -50,9 +38,9 @@ def _clear_mismatched(yt, songs: list[dict], threshold: float) -> int:
         if title_score(s["title"], real) < threshold:
             s.pop("video_id", None)
             cleared += 1
-        if i % 100 == 0:
-            print(f"  複查 {i}/{len(suspect)}（已清 {cleared}）", flush=True)
-    print(f"階段 2（ytmusicapi 標題）：再通過 {len(suspect) - cleared} 首，清除 {cleared} 首")
+        if i % 200 == 0:
+            print(f"  {i}/{len(have)}（已清 {cleared}）", flush=True)
+    print(f"驗證完成：{len(have) - cleared} 首通過，清除 {cleared} 首")
     return cleared
 
 

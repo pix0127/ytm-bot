@@ -1,10 +1,8 @@
 #!/usr/bin/env python3.12
-"""每日隨選歌單（OAuth / 官方 YouTube Data API v3 版）。
+"""每日隨選歌單。
 
-與 daily_pick 選歌相同，但用官方 API → 免 cookie、OAuth 自動 refresh，適合 NAS 無人值守。
-只用 pool 已解析好的 video_id（免搜尋，配額極省：建歌單 50 + 每首 50 + 刪舊 50）。
-
-需先： python -m ytm.oauth 完成一次授權。
+從 pool 隨機抽 N 首（只用已解析好的 video_id，不必搜尋），刪掉昨天的歌單、建今天的。
+需要有效的 browser cookie（見 ytm/cookie.py）。
 
 用法:
   python3 -m ytm.daily_pick --count 20
@@ -17,15 +15,12 @@ import random
 import sys
 from datetime import datetime
 
-import requests
-
+from . import playlist
 from .config import POOL_FILE, STATE_DIR
 from .blocklist import load_blocked_ids
-from .oauth import get_access_token
 
-V3 = "https://www.googleapis.com/youtube/v3"
 STATE_FILE = os.path.join(STATE_DIR, "daily_pick_state.json")
-PLAYLIST_DESC = "每日自動從歌曲大池隨機抽選（Data API v3）"
+PLAYLIST_DESC = "每日自動從歌曲大池隨機抽選"
 
 
 def load_pool() -> list[dict]:
@@ -49,7 +44,7 @@ def save_state(state: dict):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="每日隨選歌單（Data API v3）")
+    parser = argparse.ArgumentParser(description="每日隨選歌單")
     parser.add_argument("--count", type=int, default=20)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -69,37 +64,13 @@ def main():
         print("\n🔍 乾跑模式，未寫入")
         return
 
-    H = {"Authorization": f"Bearer {get_access_token()}", "Content-Type": "application/json"}
     state = load_state()
-
-    old = state.get("playlist_id")
-    if old:
-        r = requests.delete(f"{V3}/playlists", headers=H, params={"id": old})
-        print("🗑️  已刪除舊歌單" if r.status_code == 204 else f"⚠️  刪舊歌單 HTTP {r.status_code}")
-
     name = f"今日隨選 ({datetime.now().strftime('%m/%d')})"
-    r = requests.post(f"{V3}/playlists", headers=H, params={"part": "snippet,status"},
-                      json={"snippet": {"title": name, "description": PLAYLIST_DESC},
-                            "status": {"privacyStatus": "private"}})
-    r.raise_for_status()
-    pid = r.json()["id"]
+    pid = playlist.new_playlist(state.get("playlist_id"), name, PLAYLIST_DESC)
     print(f"✅ 已建立: {name}")
 
-    blocked = load_blocked_ids()
-    added = skipped = failed = 0
-    for s in picked:
-        vid = s["video_id"]
-        if vid in blocked:
-            skipped += 1
-            continue
-        rr = requests.post(f"{V3}/playlistItems", headers=H, params={"part": "snippet"},
-                           json={"snippet": {"playlistId": pid,
-                                             "resourceId": {"kind": "youtube#video", "videoId": vid}}})
-        if rr.ok:
-            added += 1
-        else:
-            failed += 1
-
+    res = playlist.fill_playlist(pid, [s["video_id"] for s in picked], skip=load_blocked_ids())
+    added, skipped, failed = res["added"], res["skipped"], res["failed"]
     print(f"✅ 已加入 {added}/{len(picked)} 首")
     if skipped:
         print(f"🚫 跳過 {skipped} 首（黑名單）")
@@ -108,7 +79,7 @@ def main():
 
     state["playlist_id"] = pid
     save_state(state)
-    url = f"https://music.youtube.com/playlist?list={pid}"
+    url = res["url"]
     print(f"\n🔗 {url}")
     print(f"\nJSON:{json.dumps({'url': url, 'count': len(picked), 'added': added}, ensure_ascii=False)}")
 

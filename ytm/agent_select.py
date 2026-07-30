@@ -2,7 +2,7 @@
 多步推理後挑出 N 首。用 ReAct JSON 動作協定(不依賴 gateway 的原生 function-calling)。
 
 工具的 radio/search 走 youtubei → 需要 cookie(browser.json)。
-最終建歌單仍走 Data API v3(見 dataapi),video_id 通用。
+最終建歌單見 playlist 模組,video_id 通用。
 """
 import json
 import re
