@@ -9,7 +9,9 @@
 #         容器的 FF_OPEN_URL 會自動載入 music.youtube.com，所以只要 start 就好。
 # reap  : 看門狗。你手動開來登入之後忘了關，超過 MAX_UP 分鐘就幫你關掉。
 #
-# 用法: firefox-ctl.sh warm | reap | status
+# ensure: cookie 壞了就把容器開起來等你登入（免得你收到通知卻連不上 5800）。
+#
+# 用法: firefox-ctl.sh warm | ensure | reap | status
 
 DOCKER=/usr/local/bin/docker
 NAME=ytm-firefox
@@ -35,6 +37,15 @@ case "$1" in
     $DOCKER stop "$NAME" >/dev/null
     echo "warm 完成：開了 ${WARM_SECONDS}s 讓 Firefox 續期後關閉"
     ;;
+  ensure)
+    # cookie 壞了就把容器開起來等你登入——這樣你收到 Telegram 通知時,
+    # 5800 已經在聽了,不必先想辦法開容器。cookie 正常時什麼都不做。
+    running && exit 0
+    if $DOCKER exec ytm-bot python -m ytm.cookie --check >/dev/null 2>&1; then
+        exit 0                      # cookie 正常,不需要瀏覽器
+    fi
+    $DOCKER start "$NAME" >/dev/null && echo "ensure：cookie 失效，已開啟瀏覽器等待登入"
+    ;;
   reap)
     running || exit 0
     up=$(uptime_min) || exit 0
@@ -47,11 +58,12 @@ case "$1" in
     if running; then echo "running，已開 $(uptime_min) 分鐘"; else echo "stopped"; fi
     ;;
   *)
-    echo "用法: $0 warm|reap|status"; exit 1;;
+    echo "用法: $0 warm|ensure|reap|status"; exit 1;;
 esac
 
 # 安裝到 NAS 的 /etc/crontab（tab 分隔，DSM 要求）：
 #   0	5	*	*	1	root	/volume1/docker/ytm-tools/deploy/nas-firefox/firefox-ctl.sh warm
+#   */10	*	*	*	*	root	/volume1/docker/ytm-tools/deploy/nas-firefox/firefox-ctl.sh ensure
 #   */10	*	*	*	*	root	/volume1/docker/ytm-tools/deploy/nas-firefox/firefox-ctl.sh reap
 # 改完 crontab 要 synoservice --restart crond。
 # 注意：DSM 在使用者於「控制台 → 任務排程」增刪任務時會重寫 /etc/crontab，

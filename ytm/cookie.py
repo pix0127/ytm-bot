@@ -143,6 +143,7 @@ def main():
     if args.check or not args.extract:
         alive, msg = check()
         print(f"{'✅ cookie 正常' if alive else '❌ cookie 失效'}：{msg}")
+        raise SystemExit(0 if alive else 1)  # 給 firefox-ctl.sh ensure 判斷用
 
 
 if __name__ == "__main__":
