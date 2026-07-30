@@ -57,10 +57,16 @@ _prep_pool = ThreadPoolExecutor(2)
 _pool_cache: tuple[float, list[dict]] | None = None
 
 
+NO_POOL_HINT = ("⚠️ 還沒有歌曲池，先建立它:\n"
+                "  python -m ytm.collect --all-seasons\n"
+                "  python -m ytm.collect --fill-anime-jp\n"
+                "  python -m ytm.resolve_pool")
+
+
 def _pool() -> list[dict]:
-    """pool.json 840KB / 3600 首,每則訊息重 parse 太浪費;依 mtime 快取。"""
+    """pool.json 數千首、近 1MB,每則訊息重 parse 太浪費;依 mtime 快取。"""
     global _pool_cache
-    mt = os.path.getmtime(POOL_FILE)
+    mt = os.path.getmtime(POOL_FILE)      # 檔案不存在 → FileNotFoundError,由呼叫端處理
     if _pool_cache is None or _pool_cache[0] != mt:
         _pool_cache = (mt, json.load(open(POOL_FILE)).get("songs", []))
     return _pool_cache[1]
@@ -268,7 +274,13 @@ def _cookie_watch(cfg, chat_id):
 
 def handle_message(cfg, chat_id, text, msg):
     token = cfg["telegram_token"]
-    pool = _pool()
+    try:
+        pool = _pool()
+    except FileNotFoundError:
+        # 以前這裡會讓例外冒到主迴圈,只印一行 loop error 就重試——
+        # 使用者看到的是「bot 完全不回應」,查不出原因。
+        _send(token, chat_id, NO_POOL_HINT)
+        return
     low = text.lower().strip()
     rest = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else ""
 
@@ -319,7 +331,11 @@ def handle_message(cfg, chat_id, text, msg):
 def handle_callback(cfg, chat_id, msg_id, data, cb_id):
     token = cfg["telegram_token"]
     _answer_cb(token, cb_id)
-    pool = _pool()
+    try:
+        pool = _pool()
+    except FileNotFoundError:
+        _send(token, chat_id, NO_POOL_HINT)
+        return
     p = data.split(":")
     if p[0] == "r":                                   # r:N → 隨機
         _edit(token, chat_id, msg_id, f"🎲 隨機 {p[1]} 首,建立中…")
@@ -364,6 +380,8 @@ def main():
     if allowed:
         _spawn(_cookie_watch, cfg, allowed)
     offset = None
+    if not os.path.exists(POOL_FILE):
+        print(f"⚠️  找不到 {POOL_FILE}——選曲指令會無法使用。\n{NO_POOL_HINT}", flush=True)
     print("bot 啟動,long-poll 中… (Ctrl-C 停止)", flush=True)
     while True:
         try:
