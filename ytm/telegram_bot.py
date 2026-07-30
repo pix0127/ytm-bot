@@ -53,6 +53,22 @@ def _cfg() -> dict:
     return json.load(open(BOT_CONFIG_FILE))
 
 
+_TOKEN_RE = re.compile(r"\d{8,}:[A-Za-z0-9_-]{30,}")
+
+
+def _redact(text, token: str = "") -> str:
+    """把 bot token 從輸出中遮掉。
+
+    Telegram 的 token 在 URL 裡(見 API 常數),所以 requests 的例外訊息必定含它。
+    實測:2026-07-27 一次 5 小時的 DNS 異常,在容器 log 留下 1095 行含完整 token
+    的訊息——docker logs 會一直留著,等於長期外洩。
+    """
+    s = str(text)
+    if token:
+        s = s.replace(token, "<TOKEN>")
+    return _TOKEN_RE.sub("<TOKEN>", s)
+
+
 _prep_pool = ThreadPoolExecutor(2)
 _pool_cache: tuple[float, list[dict]] | None = None
 
@@ -139,7 +155,7 @@ def _publish(token, chat_id, title, picks, note, prep=None):
         _save_bot_state({"playlist_id": pid})
         res = dataapi.fill_playlist(pid, [s["video_id"] for s in picks], skip=load_blocked_ids())
     except Exception as e:
-        _send(token, chat_id, f"⚠️ 建歌單失敗:{e}")
+        _send(token, chat_id, f"⚠️ 建歌單失敗:{_redact(e, token)}")
         return
     lines = "\n".join(f"{i}. {s.get('title','?')} — {s.get('artist','') or '?'}"
                       for i, s in enumerate(picks, 1))
@@ -178,7 +194,7 @@ def _run_agent(cfg, chat_id, query):
     try:
         picks = agent_select.select(query, _pool(), count, cfg, on_step=on_step)
     except Exception as e:
-        _send(token, chat_id, f"⚠️ 選曲失敗:{e}")
+        _send(token, chat_id, f"⚠️ 選曲失敗:{_redact(e, token)}")
         return
     if mid:
         _edit(token, chat_id, mid, f"🤖「{query}」選出 {len(picks)} 首,建立歌單中…")
@@ -232,7 +248,7 @@ def _cookie_extract(cfg, chat_id):
     try:
         cookie.save(cookie.extract(prof))
     except Exception as e:
-        _send(token, chat_id, f"⚠️ 擷取失敗：{e}")
+        _send(token, chat_id, f"⚠️ 擷取失敗：{_redact(e, token)}")
         return
     alive, msg = cookie.check()
     _send(token, chat_id, f"{'✅ cookie 已更新' if alive else '⚠️ 擷取到了但仍無法認證'}：{msg}")
@@ -267,7 +283,7 @@ def _cookie_watch(cfg, chat_id):
             elif not stale:
                 sched_warned = False
         except Exception as e:
-            print("cookie watch error:", e, flush=True)
+            print("cookie watch error:", _redact(e, cfg.get("telegram_token", "")), flush=True)
 
 
 # ─── 訊息 / 按鈕處理 ──────────────────────────────────────────────
@@ -369,7 +385,7 @@ def _set_commands(token):
     try:
         requests.post(API.format(token=token, method="setMyCommands"), json={"commands": cmds}, timeout=15)
     except Exception as e:
-        print("setMyCommands 失敗:", e)
+        print("setMyCommands 失敗:", _redact(e, token))
 
 
 def main():
@@ -411,7 +427,7 @@ def main():
                     continue
                 handle_message(cfg, cid, text, msg)
         except Exception as e:
-            print("loop error:", e, flush=True)
+            print("loop error:", _redact(e, token), flush=True)
             time.sleep(3)
 
 
