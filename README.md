@@ -35,8 +35,11 @@ Telegram: /agent 放鬆的睡前歌
 只回應設定檔裡的 `allowed_chat_id`，走 long-poll 所以不需對外開埠。
 
 ```bash
-python -m ytm.telegram_bot        # 設定檔範例見 deploy/bot_config.example.json
+python -m ytm.setup               # 互動式產生 data/bot_config.json（可重複執行）
+python -m ytm.telegram_bot
 ```
+
+`allowed_chat_id` 不用手填——第一次對 bot 說話時它會自己記住並寫檔。
 
 ### CLI
 
@@ -117,6 +120,7 @@ ytm/
   cookie.py          browser.json 的健康檢查與從 Firefox profile 擷取
   dataapi.py         官方 Data API v3 的歌單寫入
   oauth.py           device flow 授權與 token refresh
+  setup.py           互動式產生 bot_config.json
   config.py  blocklist.py  daily_pick.py  yearly_playlists.py
   anime_playlist_gen.py  prune_disliked.py
 deploy/
@@ -138,7 +142,7 @@ docs/                SETUP.md（部署）、OAUTH.md（兩個 API 的差異）
 ## 依賴
 
 ```bash
-pip install -r requirements.txt   # ytmusicapi, pykakasi
+pip install -r requirements.txt   # ytmusicapi, pykakasi, requests
 ```
 
 Python 3.12。`deploy/Dockerfile` 用 `python:3.12-slim`；程式碼與 `data/` 以 volume 掛載，

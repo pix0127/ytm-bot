@@ -53,6 +53,25 @@ def _cfg() -> dict:
     return json.load(open(BOT_CONFIG_FILE))
 
 
+def _claim_chat(cfg: dict, chat_id: int) -> bool:
+    """第一次有人對 bot 說話就把 allowed_chat_id 記下來(first-run pairing)。
+
+    以前是回覆「你的 chat_id 是 X,填進設定檔後重啟」——但 bot 已經知道了,
+    沒必要叫使用者手改檔案再重啟。只有知道 token 的人找得到這個 bot,
+    所以「先來的人綁定」在這個情境可接受。
+    """
+    cfg["allowed_chat_id"] = chat_id
+    try:
+        on_disk = json.load(open(BOT_CONFIG_FILE))
+        on_disk["allowed_chat_id"] = chat_id
+        with open(BOT_CONFIG_FILE, "w") as f:
+            json.dump(on_disk, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print("寫入 allowed_chat_id 失敗:", e, flush=True)
+        return False
+
+
 _TOKEN_RE = re.compile(r"\d{8,}:[A-Za-z0-9_-]{30,}")
 
 
@@ -421,7 +440,12 @@ def main():
                 if not cid or not text:
                     continue
                 if not allowed:
-                    _send(token, cid, f"你的 chat_id 是 {cid},填進 bot_config.json 的 allowed_chat_id 後重啟。")
+                    saved = _claim_chat(cfg, cid)
+                    allowed = cid
+                    _spawn(_cookie_watch, cfg, allowed)   # 啟動時沒有 chat_id，到現在才能開監看
+                    _send(token, cid, f"👋 已綁定這個聊天室（chat_id {cid}）"
+                                      + ("" if saved else "\n⚠️ 但寫入設定檔失敗，重啟後要再綁一次")
+                                      + "\n\n" + HELP)
                     continue
                 if cid != allowed:
                     continue

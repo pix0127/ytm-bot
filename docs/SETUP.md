@@ -18,7 +18,7 @@
 
 | 檔案 | 來源 |
 |---|---|
-| `bot_config.json` | 照 `deploy/bot_config.example.json` 填 |
+| `bot_config.json` | `docker exec -it ytm-bot python -m ytm.setup` 互動產生（或照 `deploy/bot_config.example.json` 手填） |
 | `oauth_client.json` | Google Cloud 的 OAuth client，見 [OAUTH.md](OAUTH.md) |
 | `oauth.json` | 跑一次 `python -m ytm.oauth` 產生（之後自動 refresh） |
 | `browser.json` | 不用手動準備，第 4 步會自動產生 |
@@ -38,6 +38,14 @@ docker run -d --name ytm-bot --restart unless-stopped \
 
 程式碼是掛載進去的，之後改 script 只要 `docker restart ytm-bot`，不用重 build。
 只有改 `requirements.txt` 才需要重 build。
+
+還沒有 `bot_config.json` 的話，bot 會直接退出並告訴你缺什麼。先產設定檔：
+
+```bash
+docker exec -it ytm-bot python -m ytm.setup     # 沒有 -it 會拒絕執行
+```
+
+`allowed_chat_id` 留空即可——你對 bot 說第一句話時它會自己綁定並寫檔。
 
 ### 3. 建立歌曲池
 
