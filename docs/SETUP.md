@@ -167,6 +167,11 @@ YouTube Music，在裡面登入即可。登入完成後在 Telegram 打 `/cookie
 | 想更新訂閱歌手 | `collect --artists-only`（需要有效 cookie） |
 | pool 疑似有錯配 | `resolve_pool --repair`（會先備份，刪除清單寫到 `data/backups/`） |
 
+## 相關文件
+
+為什麼這樣設計（cookie 為何只能靠瀏覽器續期、歌名比對為何需要羅馬字轉寫、
+排程為何用 host cron）見 [DESIGN.md](DESIGN.md)。
+
 ## 換平台
 
 只有第 7 步綁 Synology（`/etc/crontab` 與 `synoservice`）。其他都是標準 Docker：
