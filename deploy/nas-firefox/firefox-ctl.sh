@@ -18,6 +18,12 @@ NAME=ytm-firefox
 WARM_SECONDS=180      # 開著多久才夠讓頁面載完、cookie 輪替
 MAX_UP=60             # reap：開超過這麼多分鐘就關（夠你從容登入）
 
+# 心跳：每次執行都寫，bot 靠它偵測排程是否還活著。
+# DSM 在使用者於「任務排程」增刪任務時會重寫 /etc/crontab，我們加的行可能消失；
+# 那是靜默失敗，沒有心跳就沒人會發現。腳本被刪、crond 掛掉也一樣測得出來。
+HEARTBEAT="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)/data/state/ffctl_heartbeat"
+[ -d "$(dirname "$HEARTBEAT")" ] && date +%s > "$HEARTBEAT" 2>/dev/null
+
 uptime_min() {
     started=$($DOCKER inspect "$NAME" --format '{{.State.StartedAt}}' 2>/dev/null) || return 1
     [ -n "$started" ] || return 1
