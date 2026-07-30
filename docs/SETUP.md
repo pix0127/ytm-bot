@@ -23,15 +23,12 @@ docker run -d --name ytm-bot --restart unless-stopped \
   -v $PWD/deploy/nas-firefox/ff-profile:/app/ff-profile:ro \
   ytm-bot:latest python -m ytm.telegram_bot
 
-# 5. 建歌曲池（動畫歌免認證）
-E="docker exec -w /app ytm-bot python -m"
-$E ytm.collect --all-seasons && $E ytm.collect --fill-anime-jp && $E ytm.resolve_pool
+# 5. 建歌曲池 → 在 Telegram 打 /update，選「全部歷史季」
 
 # 6. 登入 YT Music（先在 compose 設 WEB_AUTHENTICATION 密碼）
 (cd deploy/nas-firefox && docker compose up -d)
 #    手機開 http://<NAS>:5800 登入 → Telegram 打 /cookie → 按「我登入好了」
-#    然後補歌手歌：
-$E ytm.collect --artists-only && $E ytm.resolve_pool
+#    然後在 Telegram 打 /update 選「訂閱歌手」
 
 # 7. 裝三個排程（warm / ensure / reap，內容見第 7 節）
 ```
@@ -95,21 +92,16 @@ docker run -d --name ytm-bot --restart unless-stopped \
 ### 5. 建立歌曲池
 
 **這步不能跳過**——沒有 `pool.json`，bot 雖然會啟動，但所有選曲指令都無法使用
-（它會回覆該跑哪些指令）。動畫歌不需要任何認證就能抓：
+（它會提示你打 `/update`）。
 
-```bash
-E="docker exec -w /app ytm-bot python -m"
-$E ytm.collect --all-seasons      # 從 AnimeThemes 抓歷史各季（十幾分鐘）
-$E ytm.collect --fill-anime-jp    # 補日文作品名，resolve 時用得到
-$E ytm.resolve_pool               # 歌名 → videoId
-```
+在 Telegram 打 **`/update`** → 選 **「全部歷史季」**。它會從 AnimeThemes 抓歷史各季、
+補日文作品名、再把歌名解析成 videoId，全程在訊息裡回報進度。十幾分鐘。
 
-訂閱歌手的部分需要有效 cookie，所以等第 6 步登入完成後再跑：
+動畫歌不需要登入就能抓。**訂閱歌手**的部分需要有效 cookie，所以等第 6 步登入完成後，
+再打 `/update` 選「訂閱歌手」。
 
-```bash
-$E ytm.collect --artists-only
-$E ytm.resolve_pool
-```
+解析可以中斷後續傳——它只挑沒有 videoId 的歌，所以重跑會從斷點繼續。也可以用
+`docker exec -w /app ytm-bot python -m ytm.resolve_pool` 在終端機跑（輸出比較詳細）。
 
 ### 6. 登入 YouTube Music（產生 cookie）
 

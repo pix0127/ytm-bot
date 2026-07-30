@@ -44,6 +44,34 @@ def _clear_mismatched(yt, songs: list[dict], threshold: float) -> int:
     return cleared
 
 
+def resolve_all(yt, songs: list[dict], limit: int | None = None, on_progress=None) -> tuple[int, list[str]]:
+    """把沒有 video_id 的歌解析出來。回 (填上幾首, 解不到的描述清單)。
+
+    解不到的會被標上 _drop，由呼叫端決定要不要刪。可中斷後重跑——它只挑沒有
+    video_id 的歌，所以進度天然是續傳的。
+
+    on_progress(已處理, 總數, 已填, 待刪) 每 20 首呼叫一次，給 bot 回報進度用。
+    """
+    taken = {s["video_id"] for s in songs if s.get("video_id")}
+    todo = [s for s in songs if not s.get("video_id")]
+    if limit:
+        todo = todo[:limit]
+
+    filled, drop_titles = 0, []
+    for i, s in enumerate(todo, 1):
+        vid = resolve_video_id(yt, s, taken=taken)
+        if vid:
+            s["video_id"] = vid
+            taken.add(vid)
+            filled += 1
+        else:
+            s["_drop"] = True
+            drop_titles.append(f"{s.get('title', '?')} / {s.get('artist', '') or '?'}")
+        if i % 20 == 0 and on_progress:
+            on_progress(i, len(todo), filled, len(drop_titles))
+    return filled, drop_titles
+
+
 def _clear_dups(yt, songs: list[dict]) -> int:
     """一支影片只能是一首歌。撞號的群組裡只留跟影片真實標題最像的那首,其餘清掉 video_id 等重解。"""
     by_vid: dict[str, list[dict]] = {}
@@ -94,26 +122,16 @@ def main():
         n = _clear_mismatched(yt, songs, args.threshold)
         print(f"錯配清理：{n} 首歌的 video_id 已清除，將重新解析")
 
-    taken = {s["video_id"] for s in songs if s.get("video_id")}
-    todo = [s for s in songs if not s.get("video_id")]
-    print(f"待解析（無 video_id）: {len(todo)} / 全部 {len(songs)} 首")
+    pending = len([s for s in songs if not s.get("video_id")])
+    print(f"待解析（無 video_id）: {pending} / 全部 {len(songs)} 首")
     if args.sample:
-        todo = todo[:args.sample]
-        print(f"（--sample：只處理前 {len(todo)} 首）")
+        print(f"（--sample：只處理前 {args.sample} 首）")
 
-    filled = 0
-    drop_titles = []
-    for i, s in enumerate(todo, 1):
-        vid = resolve_video_id(yt, s, taken=taken)  # video_id 為 null，故實際會去搜尋
-        if vid:
-            s["video_id"] = vid
-            taken.add(vid)
-            filled += 1
-        else:
-            s["_drop"] = True
-            drop_titles.append(f"{s.get('title', '?')} / {s.get('artist', '') or '?'}")
-        if i % 50 == 0:
-            print(f"  ...{i}/{len(todo)}（已填 {filled}、待刪 {len(drop_titles)}）", flush=True)
+    def _tick(done, total, filled, dropped):
+        print(f"  ...{done}/{total}（已填 {filled}、待刪 {dropped}）", flush=True)
+
+    filled, drop_titles = resolve_all(yt, songs, limit=args.sample, on_progress=_tick)
+    todo = [s for s in songs if s.get("_drop")]
 
     print(f"\n📊 填上 video_id: {filled} 首；找不到將刪除: {len(drop_titles)} 首")
     for t in drop_titles[:15]:

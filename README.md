@@ -22,6 +22,7 @@ bot: ✅ 已更新歌單(20 首)
 | `/rand 30` | 從歌曲池隨機抽 30 首 | — |
 | `/pool 2024 OP 15` | 挑 2024 年的片頭曲 15 首 | — |
 | `/agent 像 YOASOBI 那種` | 依心情/風格找歌，會查 YT Music 電台 | ✔ |
+| `/update` | 更新歌曲池：本季新番／全部歷史季／訂閱歌手／只重新解析 | — |
 | `/cookie` | 檢查 YT Music 登入狀態，失效時給一鍵修復按鈕 | — |
 | `/help` | 說明 | |
 
@@ -49,9 +50,13 @@ docker run -d --name ytm-bot --restart unless-stopped \
   -v $PWD/ytm:/app/ytm -v $PWD/data:/app/data \
   ytm-bot:latest python -m ytm.telegram_bot
 
-# 3. 建立歌曲池（動畫歌不需要登入，十幾分鐘）
-E="docker exec -w /app ytm-bot python -m"
-$E ytm.collect --all-seasons && $E ytm.collect --fill-anime-jp && $E ytm.resolve_pool
+```
+
+剩下的都在 Telegram 裡做：
+
+```
+/update  → 選「全部歷史季」→ 開始建立歌曲池（十幾分鐘，會回報進度）
+/rand 20 → 試試看
 ```
 
 要建歌單、用 `/agent`、或收訂閱歌手的歌，還需要 YT Music 的登入憑證——那部分與 NAS 上的

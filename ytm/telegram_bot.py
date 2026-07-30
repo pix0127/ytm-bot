@@ -5,6 +5,7 @@
   /rand  → 跳按鈕選數量 → 純隨機(最快,免 AI)
   /pool  → 跳按鈕選 年份 → OP/ED → 數量 → 篩選(免 AI)
   /agent → 追問描述(回覆一句)→ AI 依氛圍/相似找歌(會查 YTM 電台,較慢)
+  /update → 更新歌曲池（本季新番／全部歷史季／訂閱歌手／只重新解析）
   /cookie → 檢查 YTM cookie 是否還有效（失效時給重新擷取的按鈕）
   /help  → 說明
 也可直接帶參數快速執行:/rand 30、/pool 2024 OP 15、/agent 放鬆的。
@@ -41,6 +42,7 @@ HELP = (
     "/rand — 隨機來一批(最快)\n"
     "/pool — 挑指定年份、片頭(OP)或片尾(ED)的歌\n"
     "/agent — 用 AI 依心情/風格找歌(較慢,約 1–3 分)\n"
+    "/update — 更新歌曲池(抓新番、訂閱歌手、重新解析)\n"
     "/cookie — 檢查 YTM 登入狀態\n"
     "/help — 這個說明\n\n"
     "老手也可直接打:/rand 30、/pool 2024 OP 15、/agent 放鬆的"
@@ -92,10 +94,8 @@ _prep_pool = ThreadPoolExecutor(2)
 _pool_cache: tuple[float, list[dict]] | None = None
 
 
-NO_POOL_HINT = ("⚠️ 還沒有歌曲池，先建立它:\n"
-                "  python -m ytm.collect --all-seasons\n"
-                "  python -m ytm.collect --fill-anime-jp\n"
-                "  python -m ytm.resolve_pool")
+NO_POOL_HINT = ("⚠️ 還沒有歌曲池。打 /update 選「全部歷史季」就會開始建立"
+                "（十幾分鐘，會回報進度）。")
 
 
 def _pool() -> list[dict]:
@@ -224,6 +224,83 @@ def _spawn(fn, *a):
     threading.Thread(target=fn, args=a, daemon=True).start()
 
 
+# ─── 更新歌曲池 ──────────────────────────────────────────────────
+
+UPDATE_KINDS = {
+    "season":  "本季新番",
+    "all":     "全部歷史季（首次建池，十幾分鐘）",
+    "artists": "訂閱歌手（需要登入）",
+    "resolve": "只重新解析（補上缺的 video_id）",
+}
+
+
+def _do_update(cfg, chat_id, kind):
+    """從 Telegram 更新歌曲池,不必 ssh 進去跑 docker exec。
+
+    解析階段可能很久(首次建池數千首,每首要搜尋),所以放背景執行、定期編輯訊息回報進度。
+    中斷了也沒關係:resolve 只挑沒有 video_id 的歌,重跑會從斷點續下去。
+    """
+    from . import collect, resolve_pool
+    token = cfg["telegram_token"]
+    mid = _send(token, chat_id, f"🔄 {UPDATE_KINDS[kind]}：開始…")
+
+    def say(text):
+        if mid:
+            _edit(token, chat_id, mid, f"🔄 {UPDATE_KINDS[kind]}\n{text}")
+
+    try:
+        pool = collect.load_pool()
+        before = len(pool["songs"])
+        yt = None
+        if kind in ("artists", "resolve"):
+            from ytmusicapi import YTMusic
+            from .config import AUTH_FILE
+            yt = YTMusic(AUTH_FILE)
+
+        if kind == "season":
+            season, year = collect.get_current_season()
+            say(f"抓 {year} {season}…")
+            pool["songs"].extend(collect.collect_anime_themes(season, year))
+        elif kind == "all":
+            say("從 AnimeThemes 抓歷史各季，這段最久…")
+            pool["songs"].extend(collect.collect_all_anime())
+            say("補日文作品名…")
+            collect.fill_anime_jp(pool)
+        elif kind == "artists":
+            say("讀訂閱清單…")
+            songs = collect.collect_all_artists(yt)
+            pool["songs"].extend(songs)
+            pool["artists"] = sorted({s["artist"] for s in songs})
+
+        collect.save_pool(pool)
+        pool = collect.load_pool()          # 讀回去重後的結果
+        pending = len([s for s in pool["songs"] if not s.get("video_id")])
+        say(f"歌曲池 {before} → {len(pool['songs'])} 首；待解析 {pending} 首")
+
+        if pending:
+            if yt is None:
+                from ytmusicapi import YTMusic
+                from .config import AUTH_FILE
+                yt = YTMusic(AUTH_FILE)
+            say(f"解析 video_id（{pending} 首，每首約 1 秒）…")
+            filled, dropped = resolve_pool.resolve_all(
+                yt, pool["songs"],
+                on_progress=lambda d, t, f, dr: say(f"解析 {d}/{t}（成功 {f}、解不到 {dr}）"))
+            pool["songs"] = [s for s in pool["songs"] if not s.pop("_drop", False)]
+            collect.save_pool(pool)
+            tail = f"\n解析：成功 {filled} 首、解不到 {len(dropped)} 首（已移除）"
+        else:
+            tail = ""
+
+        final = collect.load_pool()["songs"]
+        usable = sum(1 for s in final if s.get("video_id"))
+        _send(token, chat_id, f"✅ {UPDATE_KINDS[kind]} 完成\n"
+                              f"歌曲池 {before} → {len(final)} 首（可用 {usable} 首）{tail}")
+    except Exception as e:
+        _send(token, chat_id, f"⚠️ 更新失敗：{_redact(e, token)}\n\n"
+                              f"（解析可中斷續傳，再跑一次會從斷點繼續）")
+
+
 # ─── cookie 生命週期 ─────────────────────────────────────────────
 
 COOKIE_CHECK_EVERY = 6 * 3600
@@ -324,6 +401,12 @@ def handle_message(cfg, chat_id, text, msg):
         _spawn(_run_agent, cfg, chat_id, text)
         return
 
+    if low.startswith("/update"):
+        rows = [[(v.split("（")[0], f"u:{k}")] for k, v in UPDATE_KINDS.items()]
+        _send(token, chat_id, "🔄 要更新哪一部分？\n\n"
+              + "\n".join(f"・{v}" for v in UPDATE_KINDS.values()), _kb(rows))
+        return
+
     if low.startswith("/cookie"):
         _spawn(_cookie_status, cfg, chat_id)
         return
@@ -375,6 +458,10 @@ def handle_callback(cfg, chat_id, msg_id, data, cb_id):
     if p[0] == "r":                                   # r:N → 隨機
         _edit(token, chat_id, msg_id, f"🎲 隨機 {p[1]} 首,建立中…")
         _spawn(_do_rand, token, chat_id, pool, int(p[1]))
+    elif p[0] == "u":                          # u:<kind> → 更新歌曲池
+        kind = p[1]
+        _edit(token, chat_id, msg_id, f"🔄 {UPDATE_KINDS.get(kind, kind)}…")
+        _spawn(_do_update, cfg, chat_id, kind)
     elif p[0] == "c" and p[1] == "extract":     # c:extract → 重新擷取 cookie
         _edit(token, chat_id, msg_id, "🍪 從 Firefox profile 擷取中…")
         _spawn(_cookie_extract, cfg, chat_id)
@@ -398,6 +485,7 @@ def _set_commands(token):
         {"command": "rand", "description": "隨機來一批(最快)"},
         {"command": "pool", "description": "挑年份・片頭(OP)/片尾(ED)"},
         {"command": "agent", "description": "用 AI 依心情/風格找歌(較慢)"},
+        {"command": "update", "description": "更新歌曲池（新番／歌手／重新解析）"},
         {"command": "cookie", "description": "檢查 YTM cookie 狀態"},
         {"command": "help", "description": "使用說明"},
     ]
