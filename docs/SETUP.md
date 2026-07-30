@@ -1,31 +1,101 @@
-# 家用部署（NAS 跑排程 + PC 供 cookie）
+# NAS 部署
 
-適用：NAS 24h 常開負責排程，PC 有登入 music.youtube.com 的瀏覽器負責產生 cookie。
+適用：NAS 24 小時常開，跑 Telegram bot 與排程；cookie 由同一台 NAS 上的按需 Firefox 容器提供。
+不需要另一台 PC。
 
-## 資料流
+## 一次性設定
+
+### 1. 放專案與資料
 
 ```
-[PC · Windows] 工作排程器每天跑 tools/refresh_ytm_cookie.py
-   → 讀 Edge/Chrome cookie → 寫 browser.json 到 NAS 共享的 data/
-[NAS · DSM] 任務排程器每天跑 deploy/run_daily.sh（Docker 容器內 python -m ytm.daily_pick）
-   → 讀 data/ 的 browser.json + pool.json → 更新歌單
+/volume1/docker/ytm-tools/
+  ytm/      程式碼
+  deploy/
+  data/     ← 設成只有你自己能讀的私人共享資料夾（裡面有 browser.json）
 ```
 
-只有 Google 把你登出時（幾個月一次）才需在瀏覽器重登；PC 的每日刷新會自動把新 cookie 同步過去。
+`data/` 需要準備的檔案：
 
-## NAS 端（Synology DSM）
+| 檔案 | 來源 |
+|---|---|
+| `bot_config.json` | 照 `deploy/bot_config.example.json` 填 |
+| `oauth_client.json` | Google Cloud 的 OAuth client，見 [OAUTH.md](OAUTH.md) |
+| `oauth.json` | 跑一次 `python -m ytm.oauth` 產生（之後自動 refresh） |
+| `browser.json` | 不用手動準備，第 3 步會自動產生 |
 
-1. 專案放 `/volume1/docker/ytm-tools`（含 `ytm/`、`data/`）。`data/` 設成**只有你自己**能讀的私人共享資料夾（含 browser.json）。
-2. Build 映像：`docker build -t ytm-tools:latest /volume1/docker/ytm-tools`（build context = 專案根，會讀 `deploy/Dockerfile`：`docker build -f deploy/Dockerfile ...` 或把 Dockerfile 複製到根目錄擇一）。
-3. 改 `deploy/run_daily.sh` 的 `PROJECT_DIR` 為實際路徑。
-4. 控制台 → 任務排程器 → 使用者定義指令碼（使用者 root）→ 每天 → `bash /volume1/docker/ytm-tools/deploy/run_daily.sh`。
+### 2. Build image 並啟動 bot
 
-## PC 端（Windows）
+```bash
+cd /volume1/docker/ytm-tools
+docker build -f deploy/Dockerfile -t ytm-tools:latest .
 
-1. `pip install browser_cookie3`
-2. 把 NAS 的 `data/` 共享資料夾掛成網路磁碟機（例如 `Z:`）。
-3. 工作排程器每天跑：`python <專案>\tools\refresh_ytm_cookie.py Z:\browser.json`
+docker run -d --name ytm-bot --restart unless-stopped \
+  -v /volume1/docker/ytm-tools/ytm:/app/ytm \
+  -v /volume1/docker/ytm-tools/data:/app/data \
+  -v /volume1/docker/ytm-tools/deploy/nas-firefox/ff-profile:/app/ff-profile:ro \
+  ytm-tools:latest python -m ytm.telegram_bot
+```
 
-## 更簡單的替代：全跑 PC
+程式碼是掛載進去的，之後改 script 只要 `docker restart ytm-bot`，不用重 build。
+只有改 `requirements.txt` 才需要重 build。
 
-若 PC 幾乎都開著，直接在 PC 上 `python -m ytm.daily_pick`，`browser_cookie3` 自動讀本機 cookie，免 NAS、免搬運。代價：排程時間點 PC 要開機。
+### 3. 登入 YouTube Music（產生 cookie）
+
+**先設密碼。** 編輯 `deploy/nas-firefox/docker-compose.yml`，把 `WEB_AUTHENTICATION` 三行的註解
+拿掉並填上帳密——那個網頁裝著一個已登入的 Google 帳號，沒密碼等於同網段誰都能用。
+
+```bash
+cd /volume1/docker/ytm-tools/deploy/nas-firefox
+docker compose up -d
+```
+
+用瀏覽器（手機也可以）開 `http://<你的NAS>:5800`。容器設了 `FF_OPEN_URL`，畫面會直接停在
+YouTube Music，在裡面登入即可。登入完成後在 Telegram 打 `/cookie` → 按「我登入好了，重新擷取」。
+
+之後就不用再管它：bot 每 6 小時會自己從 Firefox profile 同步新 cookie。
+
+### 4. 裝排程
+
+`firefox-ctl.sh` 管理那個容器的生命週期。三個排程加進 `/etc/crontab`（**tab 分隔**，DSM 要求）：
+
+```
+0	5	*	*	1	root	/volume1/docker/ytm-tools/deploy/nas-firefox/firefox-ctl.sh warm
+*/10	*	*	*	*	root	/volume1/docker/ytm-tools/deploy/nas-firefox/firefox-ctl.sh ensure
+*/10	*	*	*	*	root	/volume1/docker/ytm-tools/deploy/nas-firefox/firefox-ctl.sh reap
+```
+
+改完 `synoservice --restart crond`。
+
+| 模式 | 作用 |
+|---|---|
+| `warm` | 每週開一下容器讓 Firefox 向 Google 續期 cookie，然後關掉 |
+| `ensure` | cookie 壞了就把容器開起來等你登入 |
+| `reap` | 容器開超過 60 分鐘自動關閉 |
+
+**注意**：DSM 在你於「控制台 → 任務排程」增刪任務時會重寫 `/etc/crontab`，上面三行可能被清掉。
+`firefox-ctl.sh` 每次執行都會寫心跳檔，bot 發現心跳停超過 2 小時會用 Telegram 通知你，
+屆時把三行加回即可。也可以改用任務排程 UI 建三個「使用者定義的指令碼」任務（使用者選 root），
+那樣不會被覆寫，但綁 Synology。
+
+### 5.（選配）每日隨選歌單
+
+```
+0	8	*	*	*	root	bash /volume1/docker/ytm-tools/deploy/run_daily.sh
+```
+
+`run_daily.sh` 走 OAuth + Data API v3，不需要 cookie。記得改裡面的 `PROJECT_DIR`。
+
+## 日常維護
+
+| 情況 | 做什麼 |
+|---|---|
+| Telegram 說 cookie 失效 | 開 `http://<NAS>:5800` 登入，按通知裡的按鈕 |
+| Telegram 說排程心跳停了 | 檢查 `/etc/crontab` 那三行還在不在 |
+| 新一季動畫上線 | `docker exec -w /app ytm-bot python -m ytm.collect --all-seasons`，之後跑 `resolve_pool` |
+| 想更新訂閱歌手 | `collect --artists-only`（需要有效 cookie） |
+| pool 疑似有錯配 | `resolve_pool --repair`（會先備份，刪除清單寫到 `data/backups/`） |
+
+## 換平台
+
+只有第 4 步綁 Synology（`/etc/crontab` 與 `synoservice`）。其他都是標準 Docker：
+兩個容器 + 幾個 volume。在別的 Linux 上把排程換成一般 cron 或 systemd timer 即可。

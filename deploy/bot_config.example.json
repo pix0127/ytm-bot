@@ -4,5 +4,7 @@
   "llm_url": "https://opencode.ai/zen/go/v1/chat/completions",
   "llm_api_key": "你的-opencode-zen-key",
   "model": "deepseek-v4-flash",
-  "count_default": 20
+  "count_default": 20,
+  "firefox_url": "http://你的NAS:5800",
+  "firefox_profile": "/app/ff-profile"
 }
