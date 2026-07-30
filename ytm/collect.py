@@ -101,7 +101,7 @@ def load_pool() -> dict:
 
 
 def save_pool(pool: dict):
-    # 去重：同一首歌只保留一筆
+    # 去重一:同名同歌手只留一筆
     seen = set()
     unique = []
     for s in pool["songs"]:
@@ -109,7 +109,25 @@ def save_pool(pool: dict):
         if key not in seen:
             seen.add(key)
             unique.append(s)
-    pool["songs"] = unique
+
+    # 去重二:一支影片只能是一首歌。同名同歌手擋不掉這兩種情況——
+    #   動畫來源與歌手來源是同一支影片但標題不同（"Adrena" vs「アドレナ」）
+    #   合作曲在每位訂閱歌手的頁面都出現，各自掛不同的 artist（"Be the Light" x4）
+    # 留 metadata 較完整的那筆（有 anime 的可支援 /pool 的年份與 OP/ED 篩選）。
+    unique.sort(key=lambda s: (0 if s.get("anime") else 1))
+    by_vid = {}
+    out = []
+    for s in unique:
+        vid = s.get("video_id")
+        if not vid:
+            out.append(s)
+        elif vid not in by_vid:
+            by_vid[vid] = s
+            out.append(s)
+    dropped = len(unique) - len(out)
+    if dropped:
+        print(f"   （去重：{dropped} 筆與其他歌曲共用同一支影片，已合併）")
+    pool["songs"] = out
     with open(POOL_FILE, "w") as f:
         json.dump(pool, f, ensure_ascii=False, indent=2)
     print(f"💾  pool.json 已更新: {len(pool['songs'])} 首歌, {len(pool['artists'])} 位歌手")
@@ -204,18 +222,31 @@ def collect_all_anime() -> list[dict]:
 
 # ─── Artist Songs ────────────────────────────────────────────────
 
-def collect_artist_songs(yt, channel_id: str, artist_name: str, max_songs: int = 10) -> list[dict]:
-    """抓一個歌手的前 N 首熱門歌"""
+def collect_artist_songs(yt, channel_id: str, artist_name: str, max_songs: int = 50) -> list[dict]:
+    """抓一個歌手的熱門歌。
+
+    get_artist()['songs']['results'] 只是歌手頁上的**五首預覽**,不是完整清單;
+    完整清單要追同一個 dict 裡的 browseId(實測 LiSA:預覽 5 首 → 追下去 31 首)。
+    先前 max_songs 設 10 也沒用,因為來源本身只給 5 筆。
+    """
     try:
         artist = yt.get_artist(channel_id)
     except Exception as e:
         print(f"    ⚠️  {artist_name}: {e}")
         return []
 
+    block = artist.get("songs") or {}
+    tracks = block.get("results") or []
+    if block.get("browseId"):
+        try:
+            tracks = yt.get_playlist(block["browseId"], limit=None).get("tracks") or tracks
+        except Exception as e:
+            print(f"    ⚠️  {artist_name} 完整清單取得失敗（退回預覽 {len(tracks)} 首）：{type(e).__name__}")
+
     songs = []
-    # 熱門歌曲
-    top_songs = artist.get("songs", {}).get("results", [])
-    for s in top_songs[:max_songs]:
+    for s in tracks[:max_songs]:
+        if not s.get("videoId"):
+            continue
         songs.append({
             "title": s.get("title", ""),
             "artist": artist_name,
