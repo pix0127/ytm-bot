@@ -5,8 +5,8 @@
 
 set -e
 
-IMAGE="ytm-tools:latest"
-PROJECT_DIR="/volume1/docker/ytm-tools"    # ← 專案根目錄（含 ytm/、data/）
+IMAGE="ytm-bot:latest"
+PROJECT_DIR="/volume1/docker/ytm-bot"    # ← 專案根目錄（含 ytm/、data/）
 
 docker run --rm \
   -v "$PROJECT_DIR/ytm":/app/ytm \

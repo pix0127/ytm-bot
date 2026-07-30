@@ -68,9 +68,9 @@ case "$1" in
 esac
 
 # 安裝到 NAS 的 /etc/crontab（tab 分隔，DSM 要求）：
-#   0	5	*	*	1	root	/volume1/docker/ytm-tools/deploy/nas-firefox/firefox-ctl.sh warm
-#   */10	*	*	*	*	root	/volume1/docker/ytm-tools/deploy/nas-firefox/firefox-ctl.sh ensure
-#   */10	*	*	*	*	root	/volume1/docker/ytm-tools/deploy/nas-firefox/firefox-ctl.sh reap
+#   0	5	*	*	1	root	/volume1/docker/ytm-bot/deploy/nas-firefox/firefox-ctl.sh warm
+#   */10	*	*	*	*	root	/volume1/docker/ytm-bot/deploy/nas-firefox/firefox-ctl.sh ensure
+#   */10	*	*	*	*	root	/volume1/docker/ytm-bot/deploy/nas-firefox/firefox-ctl.sh reap
 # 改完 crontab 要 synoservice --restart crond。
 # 注意：DSM 在使用者於「控制台 → 任務排程」增刪任務時會重寫 /etc/crontab，
-# 這兩行可能被清掉，屆時重新加回即可。
+# 這三行可能被清掉，屆時重新加回即可。

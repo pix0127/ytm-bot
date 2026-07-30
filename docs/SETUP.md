@@ -8,11 +8,11 @@
 先準備：Telegram bot token（BotFather）、一個 LLM API key。下面每一步的說明見後面各節。
 
 ```bash
-cd /volume1/docker/ytm-tools        # 專案放這，data/ 設成私人共享資料夾
-D="docker run --rm -it -v $PWD/data:/app/data ytm-tools:latest python -m"
+cd /volume1/docker/ytm-bot        # 專案放這，data/ 設成私人共享資料夾
+D="docker run --rm -it -v $PWD/data:/app/data ytm-bot:latest python -m"
 
 # 2. build
-docker build -f deploy/Dockerfile -t ytm-tools:latest .
+docker build -f deploy/Dockerfile -t ytm-bot:latest .
 
 # 3. 產設定檔（必須在啟動 bot 之前，原因見第 3 節）
 $D ytm.setup
@@ -21,7 +21,7 @@ $D ytm.setup
 docker run -d --name ytm-bot --restart unless-stopped \
   -v $PWD/ytm:/app/ytm -v $PWD/data:/app/data \
   -v $PWD/deploy/nas-firefox/ff-profile:/app/ff-profile:ro \
-  ytm-tools:latest python -m ytm.telegram_bot
+  ytm-bot:latest python -m ytm.telegram_bot
 
 # 5. 建歌曲池（動畫歌免認證）
 E="docker exec -w /app ytm-bot python -m"
@@ -41,7 +41,7 @@ $E ytm.collect --artists-only && $E ytm.resolve_pool
 ### 1. 放專案與資料
 
 ```
-/volume1/docker/ytm-tools/
+/volume1/docker/ytm-bot/
   ytm/      程式碼
   deploy/
   data/     ← 設成只有你自己能讀的私人共享資料夾（裡面有 browser.json）
@@ -57,8 +57,8 @@ $E ytm.collect --artists-only && $E ytm.resolve_pool
 ### 2. Build image
 
 ```bash
-cd /volume1/docker/ytm-tools
-docker build -f deploy/Dockerfile -t ytm-tools:latest .
+cd /volume1/docker/ytm-bot
+docker build -f deploy/Dockerfile -t ytm-bot:latest .
 ```
 
 ### 3. 產生設定檔
@@ -68,8 +68,8 @@ docker build -f deploy/Dockerfile -t ytm-tools:latest .
 （`Container is restarting, wait until the container is running`）。所以用一個臨時容器來產：
 
 ```bash
-docker run --rm -it -v /volume1/docker/ytm-tools/data:/app/data \
-  ytm-tools:latest python -m ytm.setup
+docker run --rm -it -v /volume1/docker/ytm-bot/data:/app/data \
+  ytm-bot:latest python -m ytm.setup
 ```
 
 它會逐項問你並附說明，可重複執行（Enter 保留原值）。`-it` 是必要的，
@@ -81,10 +81,10 @@ docker run --rm -it -v /volume1/docker/ytm-tools/data:/app/data \
 
 ```bash
 docker run -d --name ytm-bot --restart unless-stopped \
-  -v /volume1/docker/ytm-tools/ytm:/app/ytm \
-  -v /volume1/docker/ytm-tools/data:/app/data \
-  -v /volume1/docker/ytm-tools/deploy/nas-firefox/ff-profile:/app/ff-profile:ro \
-  ytm-tools:latest python -m ytm.telegram_bot
+  -v /volume1/docker/ytm-bot/ytm:/app/ytm \
+  -v /volume1/docker/ytm-bot/data:/app/data \
+  -v /volume1/docker/ytm-bot/deploy/nas-firefox/ff-profile:/app/ff-profile:ro \
+  ytm-bot:latest python -m ytm.telegram_bot
 ```
 
 程式碼有兩份：一份打包在 image 裡（讓臨時容器不用掛載就能跑），一份用 `-v` 掛載覆蓋它。
@@ -117,7 +117,7 @@ $E ytm.resolve_pool
 拿掉並填上帳密——那個網頁裝著一個已登入的 Google 帳號，沒密碼等於同網段誰都能用。
 
 ```bash
-cd /volume1/docker/ytm-tools/deploy/nas-firefox
+cd /volume1/docker/ytm-bot/deploy/nas-firefox
 docker compose up -d
 ```
 
@@ -131,9 +131,9 @@ YouTube Music，在裡面登入即可。登入完成後在 Telegram 打 `/cookie
 `firefox-ctl.sh` 管理那個容器的生命週期。三個排程加進 `/etc/crontab`（**tab 分隔**，DSM 要求）：
 
 ```
-0	5	*	*	1	root	/volume1/docker/ytm-tools/deploy/nas-firefox/firefox-ctl.sh warm
-*/10	*	*	*	*	root	/volume1/docker/ytm-tools/deploy/nas-firefox/firefox-ctl.sh ensure
-*/10	*	*	*	*	root	/volume1/docker/ytm-tools/deploy/nas-firefox/firefox-ctl.sh reap
+0	5	*	*	1	root	/volume1/docker/ytm-bot/deploy/nas-firefox/firefox-ctl.sh warm
+*/10	*	*	*	*	root	/volume1/docker/ytm-bot/deploy/nas-firefox/firefox-ctl.sh ensure
+*/10	*	*	*	*	root	/volume1/docker/ytm-bot/deploy/nas-firefox/firefox-ctl.sh reap
 ```
 
 改完 `synoservice --restart crond`。
@@ -152,7 +152,7 @@ YouTube Music，在裡面登入即可。登入完成後在 Telegram 打 `/cookie
 ### 8.（選配）每日隨選歌單
 
 ```
-0	8	*	*	*	root	bash /volume1/docker/ytm-tools/deploy/run_daily.sh
+0	8	*	*	*	root	bash /volume1/docker/ytm-bot/deploy/run_daily.sh
 ```
 
 `run_daily.sh` 需要有效的 cookie。記得改裡面的 `PROJECT_DIR`。

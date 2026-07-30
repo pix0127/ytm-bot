@@ -1,4 +1,4 @@
-# ytm-tools
+# ytm-bot
 
 從新番片頭/片尾曲與訂閱歌手，自動產生 YouTube Music 歌單。主要介面是一個 Telegram bot，
 也可以純 CLI 使用。設計目標是丟在 NAS 上長期無人值守。
