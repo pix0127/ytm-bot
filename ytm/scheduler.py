@@ -84,3 +84,87 @@ class Scheduler:
                 time.sleep(TICK_SECONDS)
                 self._tick(dt.datetime.now())
         threading.Thread(target=loop, daemon=True, name="scheduler").start()
+
+
+# ─── Firefox 容器控制(取代 firefox-ctl.sh) ─────────────────────
+#
+# 為什麼非得有個真瀏覽器、為什麼「短暫開、用完就關」:見 docs/DESIGN.md 的
+# cookie 一節。這裡只允許對 ytm-firefox 做 start/stop/inspect——bot 掛了
+# docker.sock 等於 host root,把攻擊面收在這一個模組、三個動作內。
+
+import os
+import re
+import shutil
+import subprocess
+
+from . import cookie
+
+FIREFOX_NAME = "ytm-firefox"
+WARM_SECONDS = 180    # 開這麼久才夠頁面載完、cookie 輪替
+MAX_UP_MIN = 60       # reap:開超過這麼多分鐘就關(夠從容登入)
+
+
+def docker_available() -> bool:
+    return bool(shutil.which("docker")) and os.path.exists("/var/run/docker.sock")
+
+
+def _docker(*args) -> subprocess.CompletedProcess:
+    return subprocess.run(["docker", *args], capture_output=True, text=True, timeout=120)
+
+
+def _inspect(fmt: str) -> str | None:
+    r = _docker("inspect", FIREFOX_NAME, "--format", fmt)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def firefox_status() -> str | None:
+    return _inspect("{{.State.Status}}")
+
+
+def _parse_docker_time(s: str) -> dt.datetime:
+    # StartedAt 帶 9 位小數(ns),fromisoformat 只吃到 6 位——直接丟掉小數
+    return dt.datetime.fromisoformat(re.sub(r"\.\d+", "", s).replace("Z", "+00:00"))
+
+
+def firefox_uptime_min() -> int | None:
+    raw = _inspect("{{.State.StartedAt}}")
+    if not raw:
+        return None
+    started = _parse_docker_time(raw)
+    return int((dt.datetime.now(dt.timezone.utc) - started).total_seconds() // 60)
+
+
+def warm():
+    """定期開一下讓 Firefox 向 Google 續期 cookie,然後關掉。
+    容器的 FF_OPEN_URL 會自動載入 music.youtube.com,所以 start 就夠。"""
+    if firefox_status() == "running":
+        print("[sched] warm:已在執行中,跳過(reap 會負責關)", flush=True)
+        return
+    if _docker("start", FIREFOX_NAME).returncode != 0:
+        print("[sched] warm:start 失敗", flush=True)
+        return
+    time.sleep(WARM_SECONDS)
+    _docker("stop", FIREFOX_NAME)
+    print(f"[sched] warm 完成:開了 {WARM_SECONDS}s 續期後關閉", flush=True)
+
+
+def ensure():
+    """cookie 壞了就把容器開起來等使用者登入——收到 Telegram 通知時
+    5800 已經在聽了。cookie 正常時什麼都不做。(通知由 _cookie_watch 發,這裡不發)"""
+    if firefox_status() == "running":
+        return
+    alive, _ = cookie.check()
+    if alive:
+        return
+    if _docker("start", FIREFOX_NAME).returncode == 0:
+        print("[sched] ensure:cookie 失效,已開啟瀏覽器等待登入", flush=True)
+
+
+def reap():
+    """看門狗:手動開來登入之後忘了關,超過 MAX_UP_MIN 分鐘就幫忙關。"""
+    if firefox_status() != "running":
+        return
+    up = firefox_uptime_min()
+    if up is not None and up >= MAX_UP_MIN:
+        _docker("stop", FIREFOX_NAME)
+        print(f"[sched] reap:已開 {up} 分鐘(上限 {MAX_UP_MIN}),已關閉", flush=True)

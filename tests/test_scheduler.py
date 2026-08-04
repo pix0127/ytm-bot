@@ -1,5 +1,7 @@
 import datetime as dt
+from unittest import mock
 
+from ytm import scheduler
 from ytm.scheduler import Every, Daily, Weekly
 
 
@@ -45,3 +47,58 @@ def test_scheduler_runs_due_job_and_survives_exception(monkeypatch):
     sched._tick(t0 + dt.timedelta(minutes=10))
     sched._join_running()
     assert ran == ["ok"]
+
+
+def test_parse_started_at_nanoseconds():
+    # docker inspect 的 StartedAt 是 9 位小數 + Z,fromisoformat 吃不下,要先修剪
+    got = scheduler._parse_docker_time("2026-08-04T02:11:00.123456789Z")
+    assert got == dt.datetime(2026, 8, 4, 2, 11, 0, tzinfo=dt.timezone.utc)
+
+
+def test_reap_stops_only_when_over_limit():
+    with mock.patch.object(scheduler, "firefox_status", return_value="running"), \
+         mock.patch.object(scheduler, "firefox_uptime_min", return_value=59), \
+         mock.patch.object(scheduler, "_docker") as d:
+        scheduler.reap()
+        d.assert_not_called()
+    with mock.patch.object(scheduler, "firefox_status", return_value="running"), \
+         mock.patch.object(scheduler, "firefox_uptime_min", return_value=60), \
+         mock.patch.object(scheduler, "_docker") as d:
+        scheduler.reap()
+        d.assert_called_once_with("stop", scheduler.FIREFOX_NAME)
+
+
+def test_ensure_starts_only_when_cookie_dead_and_stopped():
+    # cookie 正常 → 不動
+    with mock.patch.object(scheduler, "firefox_status", return_value="exited"), \
+         mock.patch("ytm.cookie.check", return_value=(True, "ok")), \
+         mock.patch.object(scheduler, "_docker") as d:
+        scheduler.ensure()
+        d.assert_not_called()
+    # cookie 失效且容器沒開 → start
+    with mock.patch.object(scheduler, "firefox_status", return_value="exited"), \
+         mock.patch("ytm.cookie.check", return_value=(False, "dead")), \
+         mock.patch.object(scheduler, "_docker") as d:
+        scheduler.ensure()
+        d.assert_called_once_with("start", scheduler.FIREFOX_NAME)
+    # 已在跑 → 不動(等使用者登入,reap 會收)
+    with mock.patch.object(scheduler, "firefox_status", return_value="running"), \
+         mock.patch.object(scheduler, "_docker") as d:
+        scheduler.ensure()
+        d.assert_not_called()
+
+
+def test_warm_skips_when_running(monkeypatch):
+    with mock.patch.object(scheduler, "firefox_status", return_value="running"), \
+         mock.patch.object(scheduler, "_docker") as d:
+        scheduler.warm()
+        d.assert_not_called()
+
+
+def test_warm_start_sleep_stop(monkeypatch):
+    calls = []
+    monkeypatch.setattr(scheduler, "firefox_status", lambda: "exited")
+    monkeypatch.setattr(scheduler, "_docker", lambda *a: calls.append(a) or mock.Mock(returncode=0))
+    monkeypatch.setattr(scheduler.time, "sleep", lambda s: calls.append(("sleep", s)))
+    scheduler.warm()
+    assert calls == [("start", "ytm-firefox"), ("sleep", 180), ("stop", "ytm-firefox")]
