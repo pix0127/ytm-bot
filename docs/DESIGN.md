@@ -116,12 +116,21 @@ reasoning_effort:"low"             無效，gateway 不吃（照樣 9.9s）
 重用同一個歌單需要先清空，而清空是 O(N)（逐首移除）；整個刪掉再開新的是 O(1)。
 4000 首規模下這個差別很大，代價是歌單 URL 每次都會變。
 
-## 排程為什麼用 host cron 而不是容器
+## 排程為什麼內建進 bot
 
-要控制容器就得掛 `/var/run/docker.sock`，那等於給 host root 權限。曾考慮加一個專職的
-sidecar 容器來隔離特權，但那讓容器數從 2 變 3，而 host cron + `docker start/stop`
-是標準做法且不需要任何額外特權。
+原本排程掛在 host cron：`firefox-ctl.sh` 的 `warm`/`ensure`/`reap` 三個動作分別靠
+crontab 開關 `ytm-firefox` 容器（每週續期 cookie、cookie 壞了開容器等登入、開超過
+60 分鐘自動關）。已知的脆弱點是 DSM 在使用者於「控制台 → 任務排程」增刪任務時會重寫
+`/etc/crontab`，我們加的三行可能被靜默清掉——所以當時 `firefox-ctl.sh` 每次執行都寫
+心跳檔，bot 發現心跳停超過 2 小時會用 Telegram 通知使用者去補救。
 
-已知的脆弱點：DSM 在使用者於「控制台 → 任務排程」增刪任務時會重寫 `/etc/crontab`，
-我們加的三行可能被清掉。這是靜默失敗，所以 `firefox-ctl.sh` 每次執行都寫心跳檔，
-bot 發現心跳停超過 2 小時會用 Telegram 通知。
+現在把這三個動作收進 bot 自己的 `scheduler.py`，用 `docker` CLI 直接控制
+`ytm-firefox` 容器。理由：少一個容器（不用 sidecar 隔離特權）、消滅 DSM 重寫
+crontab 這個靜默失敗模式（心跳偵測整個不需要了）、部署收斂成一份 compose。
+
+代價：bot 容器要掛 `/var/run/docker.sock`，等於給它 host root 等級能力；而且排程
+現在跟 bot 綁在一起，bot 掛了排程也跟著死（host cron 時代兩者互相獨立）。在單一
+使用者的個人 NAS 上，這個代價可接受——bot 本來就只回應一個 `allowed_chat_id`，
+token 外洩本來就等於被接管；而「少容器」正是這次簡化的目標。bot 內所有 docker
+操作集中在 `scheduler.py` 一個模組，只允許 `start/stop/inspect ytm-firefox` 三個
+動作，不開放任意指令路徑。

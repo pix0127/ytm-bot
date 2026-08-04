@@ -40,16 +40,12 @@ bot: ✅ 已更新歌單(20 首)
 
 ```bash
 git clone https://github.com/pix0127/ytm-bot.git && cd ytm-bot
-docker build -f deploy/Dockerfile -t ytm-bot:latest .
 
 # 1. 產生設定檔（互動式，會問你每一項）
-docker run --rm -it -v $PWD/data:/app/data ytm-bot:latest python -m ytm.setup
+docker compose run --rm setup
 
-# 2. 啟動 bot，然後在 Telegram 對它說句話 → 它會自己綁定你的聊天室
-docker run -d --name ytm-bot --restart unless-stopped \
-  -v $PWD/ytm:/app/ytm -v $PWD/data:/app/data \
-  ytm-bot:latest python -m ytm.telegram_bot
-
+# 2. 啟動 bot + 按需 Firefox，然後在 Telegram 對 bot 說句話 → 它會自己綁定你的聊天室
+docker compose up -d --build
 ```
 
 剩下的都在 Telegram 裡做：
@@ -138,8 +134,8 @@ ytm/
   config.py  blocklist.py  daily_pick.py  yearly_playlists.py
   anime_playlist_gen.py  prune_disliked.py
 deploy/
-  Dockerfile  run_daily.sh  bot_config.example.json
-  nas-firefox/       按需 Firefox 容器 + 生命週期腳本（firefox-ctl.sh）
+  Dockerfile  bot_config.example.json
+  nas-firefox/       按需 Firefox 容器的執行時資料（ff-profile/，gitignored）
 data/                執行時資料與機密（gitignored）
 docs/
   SETUP.md           NAS 部署（含日常維護對照表）
