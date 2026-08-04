@@ -1,0 +1,49 @@
+# 一份 compose 統包。重建流程:git clone → 還原 data/ → docker compose up -d --build
+# 首次安裝多一步:docker compose run --rm setup(產 data/bot_config.json)
+services:
+  ytm-bot:
+    build: { context: ., dockerfile: deploy/Dockerfile }
+    image: ytm-bot:latest
+    container_name: ytm-bot
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Taipei                 # 排程(warm/daily)照本地時間跑
+    volumes:
+      - ./ytm:/app/ytm                 # 覆蓋 image 內那份,改 code 只要 restart
+      - ./data:/app/data
+      - ./deploy/nas-firefox/ff-profile:/app/ff-profile:ro
+      # bot 內建排程要開關 ytm-firefox。這給了容器 host root 等級能力——
+      # 接受理由與範圍限制見 docs/superpowers/specs/2026-08-04-setup-simplification-design.md
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  # 按需 Firefox——只在登入/續期時開,平時停著(0 CPU/0 RAM),開關由 bot 排程管。
+  # compose up 會把它帶起來一次:正好留給首次登入用,60 分鐘內 reap 會自動關。
+  # 為什麼非得有真瀏覽器:見 docs/DESIGN.md 的 cookie 一節。
+  ytm-firefox:
+    image: jlesage/firefox:latest      # 有 arm64,Synology ARM 也能跑
+    container_name: ytm-firefox
+    restart: "no"
+    ports:
+      - "5800:5800"                    # 網頁 GUI(建議只開內網)
+    volumes:
+      - ./deploy/nas-firefox/ff-profile:/config   # 登入狀態存這
+    shm_size: "1gb"                    # 2GB RAM 的機型要降到 256m,否則會 OOM
+    environment:
+      - TZ=Asia/Taipei
+      # 一開容器就自己載入 YTM:讓「開一下續期 cookie」只要 start 就完成
+      - FF_OPEN_URL=https://music.youtube.com/
+      # 強烈建議開啟存取保護(它裝著你的 Google session):
+      # - WEB_AUTHENTICATION=1
+      # - WEB_AUTHENTICATION_USERNAME=you
+      # - WEB_AUTHENTICATION_PASSWORD=set-a-password
+
+  # 首次設定:docker compose run --rm setup
+  setup:
+    profiles: ["setup"]
+    build: { context: ., dockerfile: deploy/Dockerfile }  # 首次 run 時 image 還沒 build,要能自己 build
+    image: ytm-bot:latest
+    volumes:
+      - ./data:/app/data
+    command: python -m ytm.setup
+    stdin_open: true
+    tty: true
