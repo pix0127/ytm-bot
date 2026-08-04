@@ -85,7 +85,7 @@ def main():
     if not os.path.exists(os.path.join(DATA_DIR, "browser.json")):
         print("\n還缺 browser.json（YT Music 登入憑證，搜尋與建歌單都要用）：")
         print("   在 NAS 的 Firefox 容器登入一次，然後在 Telegram 打 /cookie 按按鈕")
-        print("   細節見 docs/SETUP.md")
+        print("   細節見 CLAUDE.md 的部署一節")
 
 
 if __name__ == "__main__":

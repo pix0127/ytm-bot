@@ -90,7 +90,7 @@ class Scheduler:
 
 # ─── Firefox 容器控制(取代 firefox-ctl.sh) ─────────────────────
 #
-# 為什麼非得有個真瀏覽器、為什麼「短暫開、用完就關」:見 docs/DESIGN.md 的
+# 為什麼非得有個真瀏覽器、為什麼「短暫開、用完就關」:見 CLAUDE.md 的
 # cookie 一節。這裡只允許對 ytm-firefox 做 start/stop/inspect——bot 掛了
 # docker.sock 等於 host root,把攻擊面收在這一個模組、三個動作內。
 

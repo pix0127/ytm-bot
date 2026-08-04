@@ -13,12 +13,12 @@ services:
       - ./data:/app/data
       - ./deploy/nas-firefox/ff-profile:/app/ff-profile:ro
       # bot 內建排程要開關 ytm-firefox。這給了容器 host root 等級能力——
-      # 接受理由與範圍限制見 docs/superpowers/specs/2026-08-04-setup-simplification-design.md
+      # 接受理由與範圍限制見 CLAUDE.md 的硬規則第 3 條
       - /var/run/docker.sock:/var/run/docker.sock
 
   # 按需 Firefox——只在登入/續期時開,平時停著(0 CPU/0 RAM),開關由 bot 排程管。
   # compose up 會把它帶起來一次:正好留給首次登入用,60 分鐘內 reap 會自動關。
-  # 為什麼非得有真瀏覽器:見 docs/DESIGN.md 的 cookie 一節。
+  # 為什麼非得有真瀏覽器:見 CLAUDE.md 硬規則第 1 條。
   ytm-firefox:
     image: jlesage/firefox:latest      # 有 arm64,Synology ARM 也能跑
     container_name: ytm-firefox
