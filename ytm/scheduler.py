@@ -57,6 +57,8 @@ class Scheduler:
             j["next"] = j["schedule"].next_run(now)
 
     def _tick(self, now: dt.datetime):
+        # 只留活著的 job,否則每輪 append 會慢慢洩記憶體
+        self._running = [t for t in self._running if t.is_alive()]
         for j in self._jobs:
             if now >= j["next"]:
                 j["next"] = j["schedule"].next_run(now)
