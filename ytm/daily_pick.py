@@ -23,12 +23,15 @@ STATE_FILE = os.path.join(STATE_DIR, "daily_pick_state.json")
 PLAYLIST_DESC = "每日自動從歌曲大池隨機抽選"
 
 
-def load_pool() -> list[dict]:
+def _load_songs() -> list[dict]:
     if not os.path.exists(POOL_FILE):
-        print("❌ pool.json 不存在，請先執行 collect / resolve_pool")
-        sys.exit(1)
+        raise RuntimeError("pool.json 不存在，請先執行 collect / resolve_pool")
     with open(POOL_FILE) as f:
-        return json.load(f).get("songs", [])
+        pool = json.load(f).get("songs", [])
+    songs = [s for s in pool if s.get("video_id")]   # 只用已解析出 videoId 的
+    if not songs:
+        raise RuntimeError("pool 中沒有含 video_id 的歌，請先執行 resolve_pool")
+    return songs
 
 
 def load_state() -> dict:
@@ -43,45 +46,51 @@ def save_state(state: dict):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
+def run(count: int) -> dict:
+    songs = _load_songs()
+    picked = random.sample(songs, min(count, len(songs)))
+    state = load_state()
+    name = f"今日隨選 ({datetime.now().strftime('%m/%d')})"
+    pid = playlist.new_playlist(state.get("playlist_id"), name, PLAYLIST_DESC)
+    res = playlist.fill_playlist(pid, [s["video_id"] for s in picked], skip=load_blocked_ids())
+    state["playlist_id"] = pid
+    save_state(state)
+    return {"url": res["url"], "count": len(picked), "added": res["added"],
+            "skipped": res["skipped"], "failed": res["failed"], "name": name}
+
+
 def main():
     parser = argparse.ArgumentParser(description="每日隨選歌單")
     parser.add_argument("--count", type=int, default=20)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    songs = [s for s in load_pool() if s.get("video_id")]  # 只用已解析出 videoId 的
-    if not songs:
-        print("❌ pool 中沒有含 video_id 的歌，請先執行 resolve_pool")
+    try:
+        if args.dry_run:
+            songs = _load_songs()
+            picked = random.sample(songs, min(args.count, len(songs)))
+            print("\n" + "=" * 40)
+            print(f"🎵 共抽 {len(picked)} 首")
+            for i, s in enumerate(picked, 1):
+                print(f"  {i:2d}. {s.get('title', '?')} — {s.get('artist', '') or '?'}")
+            print("\n🔍 乾跑模式，未寫入")
+            return
+
+        info = run(args.count)
+    except RuntimeError as e:
+        print(f"❌ {e}")
         sys.exit(1)
-    picked = random.sample(songs, min(args.count, len(songs)))
 
     print("\n" + "=" * 40)
-    print(f"🎵 共抽 {len(picked)} 首")
-    for i, s in enumerate(picked, 1):
-        print(f"  {i:2d}. {s.get('title', '?')} — {s.get('artist', '') or '?'}")
-
-    if args.dry_run:
-        print("\n🔍 乾跑模式，未寫入")
-        return
-
-    state = load_state()
-    name = f"今日隨選 ({datetime.now().strftime('%m/%d')})"
-    pid = playlist.new_playlist(state.get("playlist_id"), name, PLAYLIST_DESC)
-    print(f"✅ 已建立: {name}")
-
-    res = playlist.fill_playlist(pid, [s["video_id"] for s in picked], skip=load_blocked_ids())
-    added, skipped, failed = res["added"], res["skipped"], res["failed"]
-    print(f"✅ 已加入 {added}/{len(picked)} 首")
-    if skipped:
-        print(f"🚫 跳過 {skipped} 首（黑名單）")
-    if failed:
-        print(f"⚠️  {failed} 首加入失敗（多為 Music-only／已下架，跳過）")
-
-    state["playlist_id"] = pid
-    save_state(state)
-    url = res["url"]
-    print(f"\n🔗 {url}")
-    print(f"\nJSON:{json.dumps({'url': url, 'count': len(picked), 'added': added}, ensure_ascii=False)}")
+    print(f"🎵 共抽 {info['count']} 首")
+    print(f"✅ 已建立: {info['name']}")
+    print(f"✅ 已加入 {info['added']}/{info['count']} 首")
+    if info["skipped"]:
+        print(f"🚫 跳過 {info['skipped']} 首（黑名單）")
+    if info["failed"]:
+        print(f"⚠️  {info['failed']} 首加入失敗（多為 Music-only／已下架，跳過）")
+    print(f"\n🔗 {info['url']}")
+    print(f"\nJSON:{json.dumps({'url': info['url'], 'count': info['count'], 'added': info['added']}, ensure_ascii=False)}")
 
 
 if __name__ == "__main__":

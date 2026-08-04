@@ -30,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
-from .config import POOL_FILE, BOT_CONFIG_FILE, BOT_STATE, STATE_DIR
+from .config import POOL_FILE, BOT_CONFIG_FILE, BOT_STATE
 from .blocklist import load_blocked_ids
 from . import agent_select, cookie, llm_select, playlist
 
@@ -50,8 +50,18 @@ HELP = (
 
 
 def _cfg() -> dict:
-    if not os.path.exists(BOT_CONFIG_FILE):
-        raise SystemExit(f"找不到 {BOT_CONFIG_FILE}")
+    """沒有設定檔就等,不退出。
+
+    立刻退出配上 restart: unless-stopped 會無限重啟,那時 docker exec 會被拒,
+    使用者反而沒辦法補救(SETUP.md 以前為此警告要用臨時容器)。等著讓
+    `docker compose run --rm setup` 隨時可以補設定。"""
+    warned = False
+    while not os.path.exists(BOT_CONFIG_FILE):
+        if not warned:
+            print(f"找不到 {BOT_CONFIG_FILE}——請跑 `docker compose run --rm setup`,"
+                  f"完成後會自動繼續啟動", flush=True)
+            warned = True
+        time.sleep(60)
     return json.load(open(BOT_CONFIG_FILE))
 
 
@@ -304,23 +314,6 @@ def _do_update(cfg, chat_id, kind):
 # ─── cookie 生命週期 ─────────────────────────────────────────────
 
 COOKIE_CHECK_EVERY = 6 * 3600
-SCHED_STALE_AFTER = 2 * 3600      # 排程最密的是每 10 分鐘,兩小時沒動就是壞了
-
-
-def _sched_stale() -> str | None:
-    """檢查 firefox-ctl.sh 的排程還活著嗎。
-
-    它每次執行都會更新 data/state/ffctl_heartbeat。心跳停掉代表:DSM 重寫了
-    /etc/crontab 把我們的行清掉、腳本被刪、或 crond 掛了——三種都是靜默失敗,
-    沒有這個檢查就沒人會發現(這個專案已經吃過一次:cookie 死了五天沒人知道)。
-    """
-    p = os.path.join(STATE_DIR, "ffctl_heartbeat")
-    if not os.path.exists(p):
-        return "找不到排程心跳檔（firefox-ctl.sh 沒執行過）"
-    age = time.time() - os.path.getmtime(p)
-    if age > SCHED_STALE_AFTER:
-        return f"排程心跳已 {age / 3600:.1f} 小時沒更新（正常應每 10 分鐘一次）"
-    return None
 
 
 def _cookie_status(cfg, chat_id, verbose=True):
@@ -357,7 +350,6 @@ def _cookie_watch(cfg, chat_id):
     撈完才檢查;只在「從正常變失效」時推播一次,避免每 6 小時洗一次訊息。
     """
     was_alive = True
-    sched_warned = False
     while True:
         time.sleep(COOKIE_CHECK_EVERY)
         try:
@@ -368,16 +360,6 @@ def _cookie_watch(cfg, chat_id):
             if was_alive and not alive:
                 _cookie_status(cfg, chat_id, verbose=False)
             was_alive = alive
-
-            stale = _sched_stale()
-            if stale and not sched_warned:
-                _send(cfg["telegram_token"], chat_id,
-                      f"⚠️ 瀏覽器排程可能失效了：{stale}\n\n"
-                      f"最可能的原因是 DSM 改動「任務排程」時重寫了 /etc/crontab。"
-                      f"修法見 deploy/nas-firefox/firefox-ctl.sh 檔尾註解。")
-                sched_warned = True
-            elif not stale:
-                sched_warned = False
         except Exception as e:
             print("cookie watch error:", _redact(e, cfg.get("telegram_token", "")), flush=True)
 
@@ -502,6 +484,28 @@ def main():
     _set_commands(token)
     if allowed:
         _spawn(_cookie_watch, cfg, allowed)
+
+    from . import daily_pick, scheduler
+
+    sched = scheduler.Scheduler()
+    if scheduler.docker_available():
+        sched.add("warm", scheduler.Weekly(0, 5), scheduler.warm)
+        sched.add("ensure", scheduler.Every(10), scheduler.ensure)
+        sched.add("reap", scheduler.Every(10), scheduler.reap)
+    else:
+        # 沒掛 docker.sock(例如本機開發)時 bot 照常跑,只是不管瀏覽器
+        print("⚠️  docker 不可用,warm/ensure/reap 排程停用", flush=True)
+    n = cfg.get("daily_pick_count")
+    if n:
+        def _daily():
+            info = daily_pick.run(int(n))
+            chat = cfg.get("allowed_chat_id")
+            if chat:
+                _send(token, chat, f"🎵 {info['name']}:已加入 {info['added']}/{info['count']} 首\n"
+                                   f"🔗 {info['url']}")
+        sched.add("daily_pick", scheduler.Daily(8), _daily)
+    sched.start()
+
     offset = None
     if not os.path.exists(POOL_FILE):
         print(f"⚠️  找不到 {POOL_FILE}——選曲指令會無法使用。\n{NO_POOL_HINT}", flush=True)
