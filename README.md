@@ -86,7 +86,7 @@ python -m ytm.collect --fill-anime-jp    # 補日文作品名（resolve 時用�
 python -m ytm.resolve_pool               # 把沒有 videoId 的歌解析出來
 python -m ytm.resolve_pool --repair      # 驗證既有 videoId，不對的重解
 python -m ytm.cookie --check             # 登入狀態
-python -m ytm.daily_pick --count 20      # 每日隨選歌單（可掛排程）
+python -m ytm.daily_pick --count 20      # 每日隨選歌單（設定 daily_pick_count 讓 bot 每天自動跑）
 python -m ytm.prune_disliked             # 把按爛的歌從歌單與 pool 移除
 ```
 
@@ -105,7 +105,7 @@ bot 每 6 小時  profile 有新 cookie 就自動同步
 真的失效      Telegram 通知你 → 手機開網頁登入 → 按一顆按鈕
 ```
 
-排程本身也有心跳監控，停掉會通知你。
+這些排程都內建在 bot 行程裡，不依賴 host cron（[為什麼](docs/DESIGN.md)）。
 
 ## 限制
 
@@ -116,13 +116,14 @@ bot 每 6 小時  profile 有新 cookie 就自動同步
 - **LLM 判斷的是語意，不是曲風。** 實測它對「哪首歌放鬆」主要是從歌名字面與歌手印象猜的，
   不是真的認得曲子。氛圍類需求的結果可用但不精確（[為什麼](docs/DESIGN.md)）。
 - 歌單每次會換一個新的 URL（重用舊歌單要逐首清空，太慢）。
-- 沒有測試、沒有 CI。個人自用工具。
+- 測試只覆蓋排程核心（`tests/`），沒有 CI。個人自用工具。
 
 ## 結構
 
 ```
 ytm/
   telegram_bot.py    指令、按鈕、cookie 生命週期的背景監看
+  scheduler.py       內建排程（Firefox 容器開關、每日歌單）
   setup.py           互動式產生設定檔
   agent_select.py    LLM agent 選曲（ReAct + 歌曲池/電台/搜尋三個工具）
   llm_select.py      單次 LLM 選曲（不用工具）
@@ -133,9 +134,11 @@ ytm/
   playlist.py        YT Music 歌單寫入（建/刪/整批加曲）
   config.py  blocklist.py  daily_pick.py  yearly_playlists.py
   anime_playlist_gen.py  prune_disliked.py
+docker-compose.yml   兩個容器＋setup 一份統包
 deploy/
   Dockerfile  bot_config.example.json
   nas-firefox/       按需 Firefox 容器的執行時資料（ff-profile/，gitignored）
+tests/               排程核心的單元測試
 data/                執行時資料與機密（gitignored）
 docs/
   SETUP.md           NAS 部署（含日常維護對照表）
