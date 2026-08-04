@@ -368,21 +368,11 @@ def _cookie_watch(cfg, chat_id):
 
 def handle_message(cfg, chat_id, text, msg):
     token = cfg["telegram_token"]
-    try:
-        pool = _pool()
-    except FileNotFoundError:
-        # 以前這裡會讓例外冒到主迴圈,只印一行 loop error 就重試——
-        # 使用者看到的是「bot 完全不回應」,查不出原因。
-        _send(token, chat_id, NO_POOL_HINT)
-        return
     low = text.lower().strip()
     rest = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else ""
 
-    # 回覆 agent 追問 → 直接當描述跑 agent
-    if (msg.get("reply_to_message") or {}).get("text", "").startswith(AGENT_PROMPT):
-        _spawn(_run_agent, cfg, chat_id, text)
-        return
-
+    # 這幾個指令不需要歌曲池——必須在載入 pool 之前處理,否則沒建池前
+    # 連 /cookie、/help 都會被 NO_POOL_HINT 擋掉(而 /cookie 正是建池前要用的)。
     if low.startswith("/update"):
         rows = [[(v.split("（")[0], f"u:{k}")] for k, v in UPDATE_KINDS.items()]
         _send(token, chat_id, "🔄 要更新哪一部分？\n\n"
@@ -395,6 +385,20 @@ def handle_message(cfg, chat_id, text, msg):
 
     if low.startswith("/help") or low in ("/start", "help"):
         _send(token, chat_id, HELP)
+        return
+
+    # 以下指令都要用到歌曲池;沒有就提示去建。
+    try:
+        pool = _pool()
+    except FileNotFoundError:
+        # 以前這裡會讓例外冒到主迴圈,只印一行 loop error 就重試——
+        # 使用者看到的是「bot 完全不回應」,查不出原因。
+        _send(token, chat_id, NO_POOL_HINT)
+        return
+
+    # 回覆 agent 追問 → 直接當描述跑 agent
+    if (msg.get("reply_to_message") or {}).get("text", "").startswith(AGENT_PROMPT):
+        _spawn(_run_agent, cfg, chat_id, text)
         return
 
     if low.startswith("/rand"):
@@ -431,22 +435,29 @@ def handle_message(cfg, chat_id, text, msg):
 def handle_callback(cfg, chat_id, msg_id, data, cb_id):
     token = cfg["telegram_token"]
     _answer_cb(token, cb_id)
+    p = data.split(":")
+
+    # 這些 callback 不需要歌曲池——必須在載入 pool 之前分派,否則沒建池前
+    # 連「更新歌曲池」本身都會被 NO_POOL_HINT 擋掉(死結:建不了池)。
+    if p[0] == "u" and len(p) > 1:             # u:<kind> → 更新歌曲池
+        kind = p[1]
+        _edit(token, chat_id, msg_id, f"🔄 {UPDATE_KINDS.get(kind, kind)}…")
+        _spawn(_do_update, cfg, chat_id, kind)
+        return
+    if p[:2] == ["c", "extract"]:              # c:extract → 重新擷取 cookie
+        _edit(token, chat_id, msg_id, "🍪 從 Firefox profile 擷取中…")
+        _spawn(_cookie_extract, cfg, chat_id)
+        return
+
+    # 以下 callback 都要用到歌曲池;沒有就提示去建。
     try:
         pool = _pool()
     except FileNotFoundError:
         _send(token, chat_id, NO_POOL_HINT)
         return
-    p = data.split(":")
     if p[0] == "r":                                   # r:N → 隨機
         _edit(token, chat_id, msg_id, f"🎲 隨機 {p[1]} 首,建立中…")
         _spawn(_do_rand, token, chat_id, pool, int(p[1]))
-    elif p[0] == "u":                          # u:<kind> → 更新歌曲池
-        kind = p[1]
-        _edit(token, chat_id, msg_id, f"🔄 {UPDATE_KINDS.get(kind, kind)}…")
-        _spawn(_do_update, cfg, chat_id, kind)
-    elif p[0] == "c" and p[1] == "extract":     # c:extract → 重新擷取 cookie
-        _edit(token, chat_id, msg_id, "🍪 從 Firefox profile 擷取中…")
-        _spawn(_cookie_extract, cfg, chat_id)
     elif p[0] == "p" and p[1] == "y":                 # p:y:<Y> → 選片頭/片尾
         y = p[2]
         _edit(token, chat_id, msg_id, f"{'不限年份' if y == 'all' else y + ' 年'} → 要片頭還是片尾?",
