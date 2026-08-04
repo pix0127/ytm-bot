@@ -56,7 +56,7 @@ docker compose up -d --build
 ```
 
 要建歌單、用 `/agent`、或收訂閱歌手的歌，還需要 YT Music 的登入憑證——那部分與 NAS 上的
-完整部署（含排程）見 **[docs/SETUP.md](docs/SETUP.md)**。
+完整部署步驟與設計筆記見 **[CLAUDE.md](CLAUDE.md)**。
 
 ### 設定項目
 
@@ -95,7 +95,7 @@ python -m ytm.prune_disliked             # 把按爛的歌從歌單與 pool 移�
 ## cookie 會過期，但有自動化
 
 YT Music 的登入憑證幾天到幾週就失效，而且只有當初登入的那個瀏覽器能替自己續期
-（實測記錄見 [docs/DESIGN.md](docs/DESIGN.md)）。所以部署時會在 NAS 上放一個按需啟動的
+（實測記錄見 [CLAUDE.md](CLAUDE.md)）。所以部署時會在 NAS 上放一個按需啟動的
 Firefox 容器，登入一次之後：
 
 ```
@@ -105,7 +105,7 @@ bot 每 6 小時  profile 有新 cookie 就自動同步
 真的失效      Telegram 通知你 → 手機開網頁登入 → 按一顆按鈕
 ```
 
-這些排程都內建在 bot 行程裡，不依賴 host cron（[為什麼](docs/DESIGN.md)）。
+這些排程都內建在 bot 行程裡，不依賴 host cron（[為什麼](CLAUDE.md)）。
 
 ## 限制
 
@@ -114,7 +114,7 @@ bot 每 6 小時  profile 有新 cookie 就自動同步
 - **`data/browser.json` 等於半個 Google 帳號。** 別讓它離開你的機器；NAS 上那個 Firefox
   網頁 GUI 記得設密碼。
 - **LLM 判斷的是語意，不是曲風。** 實測它對「哪首歌放鬆」主要是從歌名字面與歌手印象猜的，
-  不是真的認得曲子。氛圍類需求的結果可用但不精確（[為什麼](docs/DESIGN.md)）。
+  不是真的認得曲子。氛圍類需求的結果可用但不精確（[為什麼](CLAUDE.md)）。
 - 歌單每次會換一個新的 URL（重用舊歌單要逐首清空，太慢）。
 - 測試只覆蓋排程核心（`tests/`），沒有 CI。個人自用工具。
 
@@ -140,9 +140,7 @@ deploy/
   nas-firefox/       按需 Firefox 容器的執行時資料（ff-profile/，gitignored）
 tests/               排程核心的單元測試
 data/                執行時資料與機密（gitignored）
-docs/
-  SETUP.md           NAS 部署（含日常維護對照表）
-  DESIGN.md          為什麼這樣做——實測數據與踩過的坑
+CLAUDE.md            部署步驟、硬規則、設計決策——人和 AI 共用的知識庫
 ```
 
 Python 3.12，依賴只有 `ytmusicapi`、`pykakasi`、`requests`。程式碼同時打包在 image 裡
