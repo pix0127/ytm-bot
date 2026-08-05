@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 import urllib.parse
 from datetime import datetime
@@ -23,10 +24,23 @@ from .config import POOL_FILE, AUTH_FILE
 
 # ─── API helpers ──────────────────────────────────────────────────
 
-def api_get(url: str) -> dict:
+def api_get(url: str, attempts: int = 4) -> dict:
+    """AnimeThemes 單次查詢。慢就等、斷就重試,不讓一頁毀掉整批。
+
+    實測從 NAS 打過去單頁要 6～10 秒(尖峰更久),原本 timeout=15 幾乎貼著上限;
+    首次建池是幾十頁,只要一頁擦線就 timed out / connection reset,而整批沒有
+    任何重試——使用者看到的是「更新失敗」從頭再來。放寬 timeout 並退避重試。
+    """
     req = urllib.request.Request(url, headers={"User-Agent": "anime-playlist-gen/1.0"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
+    for i in range(attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return json.loads(resp.read())
+        except Exception:
+            if i == attempts - 1:
+                raise
+            time.sleep(2 ** i)          # 1s → 2s → 4s
+    raise AssertionError("unreachable")
 
 
 _JP_CHARS = re.compile(r"[぀-ヿ一-鿿]")
