@@ -43,6 +43,24 @@ def api_get(url: str, attempts: int = 4) -> dict:
     raise AssertionError("unreachable")
 
 
+def ytm_retry(fn, *a, attempts: int = 3, **kw):
+    """包住 ytmusicapi 呼叫的重試。
+
+    慢線路上 YTM 會回空 body,而 ytmusicapi 直接 json.loads,於是爆
+    JSONDecodeError(實測同一組有效 cookie 連跑 8 次有 6 次中)。這是傳輸問題,
+    重試就好;原本沒有重試,抓訂閱清單第一步失敗就讓整批 collect 中止。
+    """
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            return fn(*a, **kw)
+        except Exception as e:
+            last = e
+            if i < attempts - 1:
+                time.sleep(2 ** i)          # 1s → 2s
+    raise last
+
+
 _JP_CHARS = re.compile(r"[぀-ヿ一-鿿]")
 
 
@@ -244,7 +262,7 @@ def collect_artist_songs(yt, channel_id: str, artist_name: str, max_songs: int =
     先前 max_songs 設 10 也沒用,因為來源本身只給 5 筆。
     """
     try:
-        artist = yt.get_artist(channel_id)
+        artist = ytm_retry(yt.get_artist, channel_id)
     except Exception as e:
         print(f"    ⚠️  {artist_name}: {e}")
         return []
@@ -253,7 +271,7 @@ def collect_artist_songs(yt, channel_id: str, artist_name: str, max_songs: int =
     tracks = block.get("results") or []
     if block.get("browseId"):
         try:
-            tracks = yt.get_playlist(block["browseId"], limit=None).get("tracks") or tracks
+            tracks = ytm_retry(yt.get_playlist, block["browseId"], limit=None).get("tracks") or tracks
         except Exception as e:
             print(f"    ⚠️  {artist_name} 完整清單取得失敗（退回預覽 {len(tracks)} 首）：{type(e).__name__}")
 
@@ -276,7 +294,7 @@ def collect_artist_songs(yt, channel_id: str, artist_name: str, max_songs: int =
 def collect_all_artists(yt) -> list[dict]:
     """收集所有已訂閱歌手的熱門歌"""
     all_songs = []
-    subs = yt.get_library_subscriptions(limit=100)
+    subs = ytm_retry(yt.get_library_subscriptions, limit=100)
     for sub in subs:
         name = sub.get("artist", "?")
         browse_id = sub.get("browseId", "")

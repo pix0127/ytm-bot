@@ -22,6 +22,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import time
 from datetime import datetime
 
 from .config import AUTH_FILE, BACKUP_DIR
@@ -114,20 +115,39 @@ def save(headers: dict) -> str:
     return backup
 
 
-def check() -> tuple[bool, str]:
-    """cookie 還能認證嗎。用 library 端點判斷——search 免登入,測不出失效。"""
+def check(attempts: int = 3) -> tuple[bool, str]:
+    """cookie 還能認證嗎。用 library 端點判斷——search 免登入,測不出失效。
+
+    傳輸失敗要重試:實測從 NAS 連過去,同一組有效 cookie 連跑 8 次有 6 次在
+    10～14 秒後回空 body(JSONDecodeError),成功的那幾次只要 5 秒——是線路慢
+    導致回應截斷,不是認證問題。一次失敗就判失效的後果是 scheduler 的 ensure
+    每 10 分鐘誤判一次,把 Firefox 整天開在那裡等一個不需要的登入。
+
+    「請求成功但 library 回 0 筆」才是真的失效,那種重試不會變好,直接回報。
+    """
     if not os.path.exists(AUTH_FILE):
         return False, f"找不到 {os.path.basename(AUTH_FILE)}"
-    try:
-        from ytmusicapi import YTMusic
-        yt = YTMusic(AUTH_FILE)
-        subs = yt.get_library_subscriptions(limit=100)
-        pls = yt.get_library_playlists(limit=25)
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
-    if not subs and not pls:
-        return False, "library 端點回 0 筆（cookie 已失去登入狀態）"
-    return True, f"訂閱 {len(subs)} 位、歌單 {len(pls)} 個"
+    last = ""
+    for i in range(attempts):
+        try:
+            from ytmusicapi import YTMusic
+            yt = YTMusic(AUTH_FILE)
+            # 歌單有東西就已經證明是登入狀態,不必再查訂閱——這條路徑省掉一半請求。
+            # 慢線路上每個 library 查詢動輒 10 秒以上(還要加初始化抓首頁的 329KB),
+            # 少一個請求就少一次被截斷的機會。
+            pls = yt.get_library_playlists(limit=25)
+            if pls:
+                return True, f"歌單 {len(pls)} 個"
+            subs = yt.get_library_subscriptions(limit=100)
+        except Exception as e:
+            last = f"{type(e).__name__}: {e}"
+            if i < attempts - 1:
+                time.sleep(2 ** i)          # 1s → 2s
+            continue
+        if not subs:
+            return False, "library 端點回 0 筆（cookie 已失去登入狀態）"
+        return True, f"訂閱 {len(subs)} 位"
+    return False, last
 
 
 def main():
