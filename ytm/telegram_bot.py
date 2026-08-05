@@ -175,17 +175,36 @@ def _prepare_playlist(title, note):
     return _prep_pool.submit(playlist.new_playlist, _bot_state().get("playlist_id"), title, note)
 
 
+def _try_resync() -> bool:
+    """當下去 Firefox profile 撈一次新 cookie,不等 _cookie_watch 那 6 小時。"""
+    try:
+        prof = json.load(open(BOT_CONFIG_FILE)).get("firefox_profile")
+        return bool(cookie.sync_if_newer(prof))
+    except Exception:
+        return False
+
+
 def _publish(token, chat_id, title, picks, note, prep=None):
     if not picks:
         _send(token, chat_id, "找不到符合的歌,換個條件試試。")
         return
-    try:
-        pid = prep.result() if prep else playlist.new_playlist(_bot_state().get("playlist_id"), title, note)
-        _save_bot_state({"playlist_id": pid})
-        res = playlist.fill_playlist(pid, [s["video_id"] for s in picks], skip=load_blocked_ids())
-    except Exception as e:
-        _send(token, chat_id, f"⚠️ 建歌單失敗:{_redact(e, token)}")
-        return
+    vids = [s["video_id"] for s in picks]
+    for attempt in (1, 2):
+        try:
+            pid = (prep.result() if prep and attempt == 1
+                   else playlist.new_playlist(_bot_state().get("playlist_id"), title, note))
+            _save_bot_state({"playlist_id": pid})
+            res = playlist.fill_playlist(pid, vids, skip=load_blocked_ids())
+            break
+        except Exception as e:
+            # 寫入失敗最常見的原因是 cookie 過期,而 YT 回的非 JSON 讓例外訊息
+            # (JSONDecodeError)完全看不出所以然。撈得到新 cookie 就重試一次。
+            if attempt == 1 and _try_resync():
+                continue
+            alive, why = cookie.check()
+            hint = "" if alive else f"\n\ncookie 已失效({why}),重新登入後用 /cookie 重新擷取。"
+            _send(token, chat_id, f"⚠️ 建歌單失敗:{_redact(e, token)}{hint}")
+            return
     lines = "\n".join(f"{i}. {s.get('title','?')} — {s.get('artist','') or '?'}"
                       for i, s in enumerate(picks, 1))
     _send(token, chat_id, f"✅ 已更新歌單({res['added']} 首)\n{res['url']}\n\n{lines}")
